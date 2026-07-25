@@ -19,7 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import streamlit as st
 
-from cpbl_analytics.app.utils import empty_state, get_batting, get_pitching, get_scrape_runs, get_standings
+from cpbl_analytics.app.utils import empty_state, get_batting, get_last_updated, get_pitching, get_standings
 
 st.set_page_config(
     page_title="CPBL 數據分析",
@@ -33,13 +33,13 @@ st.caption("以官方網站數據為基礎的球隊 / 球員數據分析工具�
 standings = get_standings()
 batting = get_batting()
 pitching = get_pitching()
-runs = get_scrape_runs(limit=1)
+last_updated = get_last_updated()
 
 if standings.empty and batting.empty and pitching.empty:
-    empty_state("目前資料庫是空的。")
+    empty_state("目前沒有任何資料。")
 else:
-    last_scrape = runs["scraped_at"].iloc[0] if not runs.empty else "未知"
-    st.caption(f"最近一次資料更新時間（UTC）：{last_scrape}")
+    last_scrape = last_updated["scraped_at"] if last_updated else "未知"
+    st.caption(f"最近一次資料更新時間（UTC）：{last_scrape}　·　資料來源會由 GitHub Actions 排程自動更新")
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:

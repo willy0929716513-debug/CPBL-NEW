@@ -130,6 +130,12 @@ CREATE TABLE IF NOT EXISTS games (
 def get_connection() -> Iterator[sqlite3.Connection]:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    # 這裡直接確保 schema 存在（executescript 裡每個 CREATE TABLE 都是
+    # IF NOT EXISTS，重複執行沒有副作用），而不是要求呼叫端先手動呼叫
+    # init_db()。理由：網頁版在雲端全新部署時，本機根本不會有人跑過
+    # init_db()，如果沒有這一步，第一次讀取（例如「資料驗證」頁面）會直接
+    # 因為「no such table」而整頁噴錯，而不是乾脆地顯示「尚無資料」。
+    conn.executescript(SCHEMA)
     try:
         yield conn
         conn.commit()
@@ -139,7 +145,7 @@ def get_connection() -> Iterator[sqlite3.Connection]:
 
 def init_db() -> None:
     with get_connection() as conn:
-        conn.executescript(SCHEMA)
+        pass
 
 
 def _now() -> str:

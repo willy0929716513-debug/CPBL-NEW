@@ -13,9 +13,15 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "cpbl.db"
+# data/latest 底下的檔案「會」進版控（見 .gitignore），是 GitHub Actions 排程
+# 爬完之後 commit 回 repo 的「目前最新一份快照」，Streamlit Cloud 部署版的網頁
+# 就是讀這裡的檔案，不依賴本機的 sqlite（sqlite 只是本機執行時拿來累積歷史
+# 快照用，不會進版控，避免那個檔案在 git 裡越長越大）。
+LATEST_DIR = DATA_DIR / "latest"
 FIXTURES_DIR = BASE_DIR / "cpbl_analytics" / "tests" / "fixtures"
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+LATEST_DIR.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------------------------
 # 資料來源（中華職棒官網）
