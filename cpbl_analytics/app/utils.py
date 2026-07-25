@@ -4,7 +4,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from cpbl_analytics import storage
+from cpbl_analytics import latest_export, storage
 from cpbl_analytics.config import TEAM_NAMES
 from cpbl_analytics.validation import ValidationReport
 
@@ -38,29 +38,63 @@ def team_color(team_name: str) -> str:
     return TEAM_COLOR_MAP.get(team_name, "#898781")  # 未知球隊用中性灰
 
 
+def _year_filter(df: pd.DataFrame, year: int | None) -> pd.DataFrame:
+    if year is not None and "year" in df.columns:
+        return df[df["year"] == year]
+    return df
+
+
+# 每個資料載入函式都「優先讀 data/latest/*.csv」（GitHub Actions 排程爬蟲後
+# commit 回 repo 的最新快照，Streamlit Cloud 部署版一定讀得到這份），
+# 只有在本機開發、還沒有這份 CSV 時，才退回去讀本機的 sqlite（存有完整
+# 歷史快照，但不會進版控、部署到雲端後不保證還在）。
+
+
 @st.cache_data(ttl=300, show_spinner="讀取球隊戰績資料...")
 def get_standings(year: int | None = None) -> pd.DataFrame:
+    df = latest_export.load_dataset_csv("standings")
+    if df is not None:
+        return _year_filter(df, year)
     return storage.load_latest_standings(year=year)
 
 
 @st.cache_data(ttl=300, show_spinner="讀取打者數據...")
 def get_batting(year: int | None = None) -> pd.DataFrame:
+    df = latest_export.load_dataset_csv("batting")
+    if df is not None:
+        return _year_filter(df, year)
     return storage.load_latest_batting(year=year)
 
 
 @st.cache_data(ttl=300, show_spinner="讀取投手數據...")
 def get_pitching(year: int | None = None) -> pd.DataFrame:
+    df = latest_export.load_dataset_csv("pitching")
+    if df is not None:
+        return _year_filter(df, year)
     return storage.load_latest_pitching(year=year)
 
 
 @st.cache_data(ttl=300, show_spinner="讀取賽程資料...")
 def get_schedule() -> pd.DataFrame:
+    df = latest_export.load_dataset_csv("schedule")
+    if df is not None:
+        return df
     return storage.load_latest_schedule()
 
 
 @st.cache_data(ttl=60, show_spinner=False)
 def get_scrape_runs(limit: int = 30) -> pd.DataFrame:
     return storage.load_scrape_runs(limit=limit)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_latest_validation_summary() -> dict | None:
+    return latest_export.load_validation_summary()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_last_updated() -> dict | None:
+    return latest_export.load_last_updated()
 
 
 def render_validation_report(report: ValidationReport, *, title: str) -> None:
@@ -84,7 +118,9 @@ def render_validation_report(report: ValidationReport, *, title: str) -> None:
 def empty_state(message: str) -> None:
     st.info(
         f"{message}\n\n"
-        "尚未有資料。請先在有網路連線的環境執行：\n\n"
-        "```bash\npython -m cpbl_analytics.cli scrape\n```\n\n"
-        "詳見 README「快速開始」章節。"
+        "尚未有資料。可能原因：\n"
+        "1. 這是本機開發環境，還沒跑過 `python -m cpbl_analytics.cli scrape`；或\n"
+        "2. 這是雲端部署版，但 GitHub Actions 排程爬蟲還沒有成功執行過一次\n"
+        "   （去 repo 的 Actions 分頁確認 `定期更新 CPBL 資料` 這個 workflow 有沒有跑過／有沒有失敗）。\n\n"
+        "詳見 README「自動化更新」章節。"
     )

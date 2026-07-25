@@ -1,4 +1,4 @@
-"""命令列工具：實際對官網跑一次完整爬蟲 + 驗證 + 寫入資料庫。
+"""命令列工具：實際對官網跑一次完整爬蟲 + 驗證 + 寫入資料庫 + 匯出快照。
 
 使用方式：
     python -m cpbl_analytics.cli scrape --year 2026
@@ -6,19 +6,25 @@
 注意：這支程式需要能連上 https://www.cpbl.com.tw 的網路環境才能運作。
 若在沒有對外網路的沙盒/CI 環境執行，會直接拿到連線錯誤，這是預期行為，
 不代表程式邏輯有問題（可參考 README「已知限制」章節）。
+
+這支程式也是 `.github/workflows/scrape.yml` 排程用的進入點：GitHub Actions
+會定期執行這支程式，把 data/latest/ 底下匯出的 CSV／JSON 快照 commit 回 repo，
+讓部署在 Streamlit Community Cloud 上的網頁版不需要仰賴任何人手動開電腦
+更新資料。
 """
 from __future__ import annotations
 
 import argparse
 import sys
 
-from cpbl_analytics import storage
+from cpbl_analytics import latest_export, storage
 from cpbl_analytics.scraper.batting import fetch_batting_stats
 from cpbl_analytics.scraper.http import FetchError, ParsingError
 from cpbl_analytics.scraper.pitching import fetch_pitching_stats
 from cpbl_analytics.scraper.schedule import fetch_schedule
 from cpbl_analytics.scraper.standings import fetch_standings
 from cpbl_analytics.validation import (
+    ValidationReport,
     validate_batting_stats,
     validate_pitching_stats,
     validate_schedule,
@@ -26,7 +32,7 @@ from cpbl_analytics.validation import (
 )
 
 
-def _print_report(dataset: str, report) -> None:
+def _print_report(dataset: str, report: ValidationReport) -> None:
     status = "✅ 全部通過" if report.all_passed else "❌ 有檢查未通過"
     print(f"\n[{dataset}] 驗證結果：{status}")
     for check in report.checks:
@@ -39,13 +45,16 @@ def _print_report(dataset: str, report) -> None:
 def cmd_scrape(args: argparse.Namespace) -> int:
     storage.init_db()
     exit_code = 0
+    reports: dict[str, ValidationReport] = {}
 
     try:
         print("正在抓取球隊戰績...")
         standings = fetch_standings()
         report = validate_standings(standings)
+        reports["standings"] = report
         storage.save_standings(standings, year=args.year)
         storage.save_scrape_run(dataset="standings", report=report, row_count=len(standings), year=args.year)
+        latest_export.export_dataset_csv("standings", standings)
         _print_report("球隊戰績", report)
         if not report.all_passed:
             exit_code = 1
@@ -57,8 +66,10 @@ def cmd_scrape(args: argparse.Namespace) -> int:
         print("\n正在抓取打者數據...")
         batting = fetch_batting_stats(year=args.year)
         report = validate_batting_stats(batting)
+        reports["batting"] = report
         storage.save_batting(batting, year=args.year)
         storage.save_scrape_run(dataset="batting", report=report, row_count=len(batting), year=args.year)
+        latest_export.export_dataset_csv("batting", batting)
         _print_report("打者數據", report)
         if not report.all_passed:
             exit_code = 1
@@ -70,8 +81,10 @@ def cmd_scrape(args: argparse.Namespace) -> int:
         print("\n正在抓取投手數據...")
         pitching = fetch_pitching_stats(year=args.year)
         report = validate_pitching_stats(pitching)
+        reports["pitching"] = report
         storage.save_pitching(pitching, year=args.year)
         storage.save_scrape_run(dataset="pitching", report=report, row_count=len(pitching), year=args.year)
+        latest_export.export_dataset_csv("pitching", pitching)
         _print_report("投手數據", report)
         if not report.all_passed:
             exit_code = 1
@@ -83,14 +96,21 @@ def cmd_scrape(args: argparse.Namespace) -> int:
         print("\n正在抓取賽程與戰報...")
         games = fetch_schedule()
         report = validate_schedule(games)
+        reports["schedule"] = report
         storage.save_schedule(games)
         storage.save_scrape_run(dataset="schedule", report=report, row_count=len(games), year=args.year)
+        latest_export.export_dataset_csv("schedule", games)
         _print_report("賽程與戰報", report)
         if not report.all_passed:
             exit_code = 1
     except (FetchError, ParsingError) as exc:
         print(f"🛑 賽程抓取失敗：{exc}")
         exit_code = 1
+
+    if reports:
+        latest_export.export_validation_summary(reports)
+        latest_export.export_last_updated(year=args.year)
+        print(f"\n已匯出最新快照到 {latest_export.LATEST_DIR}（會被 GitHub Actions commit 回 repo）")
 
     return exit_code
 

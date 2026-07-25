@@ -16,7 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import streamlit as st
 
-from cpbl_analytics.app.utils import get_scrape_runs
+from cpbl_analytics.app.utils import get_latest_validation_summary, get_scrape_runs
 
 st.set_page_config(page_title="資料驗證 - CPBL 數據分析", page_icon="🔍", layout="wide")
 st.title("🔍 資料驗證")
@@ -44,31 +44,53 @@ st.markdown(
 st.divider()
 
 runs = get_scrape_runs(limit=50)
-if runs.empty:
-    st.info("尚未有任何爬蟲執行紀錄。")
-    st.stop()
 
-st.subheader("執行歷史")
-st.dataframe(
-    runs[["dataset", "scraped_at", "year", "row_count", "error_count", "warning_count", "all_passed"]]
-    .rename(columns={
-        "dataset": "資料集", "scraped_at": "執行時間(UTC)", "year": "年度",
-        "row_count": "筆數", "error_count": "錯誤數", "warning_count": "警告數",
-        "all_passed": "全部通過",
-    }),
-    hide_index=True,
-)
+if not runs.empty:
+    # 本機開發情境：sqlite 裡有完整的歷史執行紀錄，顯示完整歷史表格。
+    st.subheader("執行歷史（本機 sqlite）")
+    st.dataframe(
+        runs[["dataset", "scraped_at", "year", "row_count", "error_count", "warning_count", "all_passed"]]
+        .rename(columns={
+            "dataset": "資料集", "scraped_at": "執行時間(UTC)", "year": "年度",
+            "row_count": "筆數", "error_count": "錯誤數", "warning_count": "警告數",
+            "all_passed": "全部通過",
+        }),
+        hide_index=True,
+    )
 
-st.divider()
-st.subheader("最近一次各資料集的詳細驗證結果")
+    st.divider()
+    st.subheader("最近一次各資料集的詳細驗證結果")
 
-for dataset in runs["dataset"].unique():
-    latest = runs[runs["dataset"] == dataset].iloc[0]
-    status = "✅ 全部通過" if latest["all_passed"] else f"❌ {latest['error_count']} 項錯誤、{latest['warning_count']} 項警告"
-    with st.expander(f"{dataset}（{latest['scraped_at']}）— {status}", expanded=not bool(latest["all_passed"])):
-        checks = json.loads(latest["report_json"])
-        for check in checks:
-            icon = "✅" if check["passed"] else ("🛑" if check["severity"] == "error" else "⚠️")
-            st.write(f"{icon} **{check['name']}**：{check['message']}")
-            for item in check.get("offending_items", [])[:10]:
-                st.write(f"　　- {item}")
+    for dataset in runs["dataset"].unique():
+        latest = runs[runs["dataset"] == dataset].iloc[0]
+        status = "✅ 全部通過" if latest["all_passed"] else f"❌ {latest['error_count']} 項錯誤、{latest['warning_count']} 項警告"
+        with st.expander(f"{dataset}（{latest['scraped_at']}）— {status}", expanded=not bool(latest["all_passed"])):
+            checks = json.loads(latest["report_json"])
+            for check in checks:
+                icon = "✅" if check["passed"] else ("🛑" if check["severity"] == "error" else "⚠️")
+                st.write(f"{icon} **{check['name']}**：{check['message']}")
+                for item in check.get("offending_items", [])[:10]:
+                    st.write(f"　　- {item}")
+else:
+    # 雲端部署情境：沒有本機 sqlite 歷史，改讀 GitHub Actions 每次爬蟲後
+    # commit 回 repo 的 data/latest/validation_summary.json（只有「最新一次」，
+    # 沒有歷史，但一樣完整揭露每一項檢查的結果）。
+    summary = get_latest_validation_summary()
+    if summary is None:
+        st.info("尚未有任何爬蟲執行紀錄。")
+        st.stop()
+
+    st.subheader(f"最近一次驗證結果（產生於 {summary['generated_at']}，UTC）")
+    st.caption(
+        "這份結果是 GitHub Actions 排程爬蟲之後 commit 回 repo 的快照，"
+        "檔案本身也可以直接在 GitHub 上開啟：`data/latest/validation_summary.json`。"
+    )
+
+    for dataset, info in summary["datasets"].items():
+        status = "✅ 全部通過" if info["all_passed"] else f"❌ {info['error_count']} 項錯誤、{info['warning_count']} 項警告"
+        with st.expander(f"{dataset} — {status}", expanded=not info["all_passed"]):
+            for check in info["checks"]:
+                icon = "✅" if check["passed"] else ("🛑" if check["severity"] == "error" else "⚠️")
+                st.write(f"{icon} **{check['name']}**：{check['message']}")
+                for item in check.get("offending_items", [])[:10]:
+                    st.write(f"　　- {item}")
