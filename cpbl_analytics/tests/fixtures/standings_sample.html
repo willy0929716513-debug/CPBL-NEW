@@ -1,0 +1,23 @@
+<!--
+  這是「本季球隊戰績」頁面的模擬範例（非官網即時資料），純粹用來測試
+  parser 的解析邏輯與 validation 的交叉驗證公式是否正確。
+  數字經過人工設計，使其滿足：出賽=勝+負+和、勝率=勝/(勝+負)、
+  全聯盟總勝場=總敗場。
+-->
+<html>
+<body>
+<table class="standings_tb">
+  <thead>
+    <tr><th>排名</th><th>球隊</th><th>出賽數</th><th>勝</th><th>負</th><th>和</th><th>勝率</th><th>勝差</th><th>近十場</th><th>連勝</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>1</td><td>中信兄弟</td><td>100</td><td>62</td><td>38</td><td>0</td><td>.620</td><td>-</td><td>7-3</td><td>W3</td></tr>
+    <tr><td>2</td><td>統一7-ELEVEn獅</td><td>100</td><td>55</td><td>45</td><td>0</td><td>.550</td><td>7.0</td><td>6-4</td><td>W1</td></tr>
+    <tr><td>3</td><td>樂天桃猿</td><td>100</td><td>52</td><td>48</td><td>0</td><td>.520</td><td>10.0</td><td>5-5</td><td>L1</td></tr>
+    <tr><td>4</td><td>富邦悍將</td><td>100</td><td>48</td><td>52</td><td>0</td><td>.480</td><td>14.0</td><td>4-6</td><td>L2</td></tr>
+    <tr><td>5</td><td>台鋼雄鷹</td><td>100</td><td>45</td><td>55</td><td>0</td><td>.450</td><td>17.0</td><td>5-5</td><td>W2</td></tr>
+    <tr><td>6</td><td>味全龍</td><td>100</td><td>38</td><td>62</td><td>0</td><td>.380</td><td>24.0</td><td>3-7</td><td>L4</td></tr>
+  </tbody>
+</table>
+</body>
+</html>
