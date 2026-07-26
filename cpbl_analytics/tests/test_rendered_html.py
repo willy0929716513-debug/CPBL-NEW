@@ -17,6 +17,7 @@ import pytest
 from cpbl_analytics.scraper.http import (
     FetchError,
     _goto_with_www_fallback,
+    _select_and_verify,
     _try_click_by_text,
     _try_select_option,
     get_rendered_html,
@@ -105,6 +106,20 @@ def test_try_select_option_returns_false_when_no_select_matches():
     assert _try_select_option(page, "投手") is False
 
 
+def test_try_select_option_falls_back_to_substring_match():
+    # 官網下拉選單裡實際顯示的文字是「投手成績」，不是單純的「投手」——
+    # 這是修這支程式的真正原因，一定要涵蓋這個情境。
+    page = Mock()
+    select = _fake_select(["打者成績", "投手成績", "守備成績"])
+    selects = Mock()
+    selects.count.return_value = 1
+    selects.nth.return_value = select
+    page.locator.return_value = selects
+
+    assert _try_select_option(page, "投手") is True
+    select.select_option.assert_called_once_with(label="投手成績")
+
+
 def test_try_click_by_text_skips_click_when_locator_finds_nothing():
     # 這是修這支程式的關鍵原因：locator 完全沒找到符合的元素時，
     # click() 預設會一直等到逾時，而不是馬上失敗。用 count() 先檔掉，
@@ -126,3 +141,60 @@ def test_try_click_by_text_clicks_when_locator_finds_something():
 
     assert _try_click_by_text(page, "投手", exact=True) is True
     locator.click.assert_called_once()
+
+
+def _page_with_selectable_option(option_texts: list[str]) -> Mock:
+    """回傳一個 page mock，其 <select> 選單能被 _try_select_option 選中。"""
+    page = Mock()
+    select = _fake_select(option_texts)
+    selects = Mock()
+    selects.count.return_value = 1
+    selects.nth.return_value = select
+    page.locator.return_value = selects
+    return page
+
+
+def test_select_and_verify_returns_content_immediately_when_no_verification_needed():
+    page = _page_with_selectable_option(["打者成績", "投手成績"])
+    page.content.return_value = "<html>投手資料</html>"
+
+    result = _select_and_verify(
+        page, url="https://example.com", option_text="投手成績",
+        verify_text_absent=None, timeout_ms=1000,
+    )
+
+    assert result == "<html>投手資料</html>"
+
+
+def test_select_and_verify_clicks_query_button_when_switch_did_not_take_effect():
+    # 選完選項後畫面第一次還是舊內容（仍有「打擊率」），程式應該再多按一次
+    # 「查詢」按鈕，第二次拿到的內容才是真的切換後的結果。
+    page = _page_with_selectable_option(["打者成績", "投手成績"])
+    page.content.side_effect = ["<html>打擊率...(舊內容)</html>", "<html>防禦率...(新內容)</html>"]
+
+    query_button = Mock()
+    query_button.count.return_value = 1
+    page.get_by_text.return_value.first = query_button
+
+    result = _select_and_verify(
+        page, url="https://example.com", option_text="投手成績",
+        verify_text_absent="打擊率", timeout_ms=1000,
+    )
+
+    assert result == "<html>防禦率...(新內容)</html>"
+    query_button.click.assert_called_once()
+
+
+def test_select_and_verify_raises_when_stale_content_never_changes():
+    page = _page_with_selectable_option(["打者成績", "投手成績"])
+    page.content.return_value = "<html>打擊率...(還是舊內容)</html>"
+
+    no_button = Mock()
+    no_button.count.return_value = 0
+    page.get_by_text.return_value.first = no_button
+
+    with pytest.raises(FetchError, match="打擊率"):
+        _select_and_verify(
+            page, url="https://example.com", option_text="投手成績",
+            verify_text_absent="打擊率", timeout_ms=1000,
+        )

@@ -160,6 +160,7 @@ def get_rendered_html_after_selecting(
     url: str,
     *,
     option_text: str,
+    verify_text_absent: str | None = None,
     timeout_ms: int = 20000,
 ) -> str:
     """載入網頁後，切換到某個分頁／篩選選項，再回傳切換後的渲染結果。
@@ -172,36 +173,90 @@ def get_rendered_html_after_selecting(
     option_text 的可點擊元素直接點下去（分頁式 tab 常見的做法）。
 
     Args:
-        option_text: 要切換過去的分頁/選項文字，例如「投手」。
+        option_text: 要切換過去的分頁/選項文字，例如「投手成績」。
+        verify_text_absent: 選填。切換「前」畫面上會有、切換「成功後」應該
+            消失的文字（例如打者表特有的表頭「打擊率」）。有些頁面選完
+            下拉選單選項後，還需要另外按「查詢」/「搜尋」按鈕才會真的重新
+            查詢，光呼叫 select_option() 不會觸發——提供這個參數，才能在
+            切換看起來「有做但沒有真的生效」時，自動再多試一步按查詢按鈕，
+            而不是安靜地把切換前的舊內容當成新內容回傳。
 
     Raises:
-        FetchError: 瀏覽器啟動失敗、頁面載入逾時、或完全找不到符合的
-            切換元素。
+        FetchError: 瀏覽器啟動失敗、頁面載入逾時、完全找不到符合的切換元素、
+            或（提供 verify_text_absent 時）切換後畫面內容看起來仍是切換前
+            的樣子。
     """
 
     def _run(page):
         _goto_with_www_fallback(page, url, timeout_ms=timeout_ms)
-
-        switched = (
-            _try_select_option(page, option_text)
-            or _try_click_by_text(page, option_text, exact=True)
-            or _try_click_by_text(page, option_text, exact=False)
+        return _select_and_verify(
+            page,
+            url=url,
+            option_text=option_text,
+            verify_text_absent=verify_text_absent,
+            timeout_ms=timeout_ms,
         )
-        if not switched:
-            content = page.content()
-            snippet = content[:4000] + (
-                f"...(截斷，完整長度 {len(content)} 字元)" if len(content) > 4000 else ""
-            )
-            raise FetchError(
-                f"在 {url} 上找不到任何可以切換到「{option_text}」的下拉選單選項，"
-                "也找不到文字等於或包含這個字的可點擊元素。\n"
-                f"頁面渲染後的 HTML（截斷）：\n{snippet}"
-            )
-
-        page.wait_for_load_state("networkidle", timeout=timeout_ms)
-        return page.content()
 
     return _with_rendered_page(url, _run, timeout_ms=timeout_ms)
+
+
+def _truncate(text: str, *, limit: int = 4000) -> str:
+    if len(text) > limit:
+        return text[:limit] + f"...(截斷，完整長度 {len(text)} 字元)"
+    return text
+
+
+def _select_and_verify(
+    page,
+    *,
+    url: str,
+    option_text: str,
+    verify_text_absent: str | None,
+    timeout_ms: int,
+) -> str:
+    """實際執行「切換分頁/選項 -> 視需要再多按查詢按鈕 -> 回傳結果」的邏輯。
+
+    拆成獨立函式（不像其他 Playwright 邏輯包在閉包裡），是為了可以直接餵
+    假的 page 物件做單元測試，不用每次都真的啟動瀏覽器。
+    """
+    switched = (
+        _try_select_option(page, option_text)
+        or _try_click_by_text(page, option_text, exact=True)
+        or _try_click_by_text(page, option_text, exact=False)
+    )
+    if not switched:
+        content = page.content()
+        raise FetchError(
+            f"在 {url} 上找不到任何可以切換到「{option_text}」的下拉選單選項，"
+            "也找不到文字等於或包含這個字的可點擊元素。\n"
+            f"頁面渲染後的 HTML（截斷）：\n{_truncate(content)}"
+        )
+
+    page.wait_for_load_state("networkidle", timeout=timeout_ms)
+    content = page.content()
+
+    if verify_text_absent is not None and verify_text_absent in content:
+        # 切換動作執行了，但畫面看起來還是切換前的樣子——常見原因是
+        # 這種查詢頁面選完選項後還需要手動按「查詢/搜尋」才會真的送出，
+        # 這裡多嘗試一步，而不是直接把舊內容當新內容回傳。
+        (
+            _try_click_by_text(page, "查詢", exact=False)
+            or _try_click_by_text(page, "搜尋", exact=False)
+            or _try_click_by_text(page, "送出", exact=False)
+        )
+        page.wait_for_load_state("networkidle", timeout=timeout_ms)
+        content = page.content()
+
+        if verify_text_absent in content:
+            raise FetchError(
+                f"已嘗試切換到「{option_text}」（也試過點擊查詢/搜尋按鈕），"
+                f"但畫面內容看起來仍然是切換前的樣子（仍然包含"
+                f"「{verify_text_absent}」）。可能這個下拉選單不是實際控制"
+                "這份資料的開關，或是還需要別的步驟才會真的重新查詢。\n"
+                f"頁面渲染後的 HTML（截斷）：\n{_truncate(content)}"
+            )
+
+    return content
 
 
 def _try_select_option(page, option_text: str) -> bool:
