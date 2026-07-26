@@ -6,4 +6,5 @@ streamlit>=1.38
 plotly>=5.22
 pydantic>=2.6
 tenacity>=8.2
+playwright>=1.44
 pytest>=8.0

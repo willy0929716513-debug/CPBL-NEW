@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Comment
 from bs4.element import Tag
 
 from cpbl_analytics.scraper.http import ParsingError
@@ -27,14 +27,24 @@ def _clean_text(text: str) -> str:
 
 
 def _raw_snippet(tag: Tag, *, limit: int = 2500) -> str:
-    """回傳一個標籤的原始 HTML（截斷），塞進錯誤訊息方便直接比對真實結構。
+    """回傳一個標籤的原始 HTML（截斷，且先把 HTML 註解拿掉），塞進錯誤訊息
+    方便直接比對真實結構。
 
     只看清理過的文字（表頭字串、儲存格文字）有時候看不出問題，例如：
     表頭用 colspan 合併了好幾個實際資料欄位、資料其實是圖片的 alt 文字、
     欄位裡藏著我們沒預期到的巢狀標籤。附上原始 HTML，之後不用再往返
     一次「你重跑一次、我再看 log」，可以直接從這次的錯誤訊息判斷怎麼修。
+
+    先把 <!-- --> 註解拿掉才截斷：官網原始碼裡常常有大段開發者留的說明
+    註解（例如欄位命名慣例），這些註解不影響資料結構判讀，但會把截斷長度
+    全部吃光，導致真正需要看的資料格反而被截掉、看不到。
     """
-    raw = str(tag)
+    # 重新獨立解析一份，而不是就地在原本的 tag 上動刀——避免任何 bs4
+    # 淺拷貝／父節點共享的疑慮意外動到還在使用中的原始解析樹。
+    tag_copy = BeautifulSoup(str(tag), "lxml")
+    for comment in tag_copy.find_all(string=lambda s: isinstance(s, Comment)):
+        comment.extract()
+    raw = str(tag_copy)
     if len(raw) > limit:
         return raw[:limit] + f"...(截斷，完整長度 {len(raw)} 字元)"
     return raw
@@ -84,6 +94,22 @@ def parse_table(
         )
 
     header_texts = [_clean_text(c.get_text()) for c in header_cells]
+    body_rows = _find_body_rows(table, header_row_selector)
+
+    def _diagnostics() -> str:
+        # 分開附上「表頭列」跟「第一列資料」各自的原始 HTML，而不是整個
+        # <table> 塞一份截斷長度——欄位很多的表格（例如打者數據表有 30 幾欄）
+        # 光表頭列的原始碼就可能塞滿截斷長度，導致真正需要看的資料格反而
+        # 被擠掉、看不到。
+        header_row_tag = header_cells[0].parent if header_cells else None
+        parts = []
+        if header_row_tag is not None:
+            parts.append(f"表頭列原始 HTML（截斷）：\n{_raw_snippet(header_row_tag, limit=2000)}")
+        if body_rows:
+            parts.append(f"第一列資料原始 HTML（截斷）：\n{_raw_snippet(body_rows[0], limit=2000)}")
+        else:
+            parts.append("（表格目前沒有任何資料列）")
+        return "\n".join(parts)
 
     # 建立「表頭文字 -> 欄位索引」的對應
     index_of_field: dict[str, int] = {}
@@ -102,12 +128,11 @@ def parse_table(
                     f"表格缺少必要欄位「{spec.field}」"
                     f"（預期表頭別名：{spec.header_aliases}，"
                     f"實際表頭：{header_texts}）。官網可能已改版。\n"
-                    f"表格原始 HTML（截斷）：\n{_raw_snippet(table)}"
+                    f"{_diagnostics()}"
                 )
             continue
         index_of_field[spec.field] = found_index
 
-    body_rows = _find_body_rows(table, header_row_selector)
     if not body_rows:
         raise ParsingError(
             "表格沒有任何資料列（可能是空賽季、或版面改變）。\n"
@@ -122,13 +147,10 @@ def parse_table(
     sample_row = body_rows[0]
     sample_cell_count = len(sample_row.find_all(["td", "th"]))
     if sample_cell_count > len(header_texts):
-        sample_cell_texts = [_clean_text(c.get_text()) for c in sample_row.find_all(["td", "th"])]
         raise ParsingError(
             f"資料列的儲存格數量（{sample_cell_count}）比表頭數量（{len(header_texts)}）多，"
             "可能是表頭用 colspan 合併了多個實際欄位，用索引對應會整批錯位，所以先擋下來。\n"
-            f"表頭：{header_texts}\n"
-            f"第一列資料儲存格內容：{sample_cell_texts}\n"
-            f"表格原始 HTML（截斷）：\n{_raw_snippet(table)}"
+            f"{_diagnostics()}"
         )
 
     records: list[dict[str, str]] = []

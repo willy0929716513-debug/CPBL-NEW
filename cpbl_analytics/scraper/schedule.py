@@ -1,9 +1,15 @@
 """賽程與戰報 scraper。
 
-官網賽程頁面通常是「一日一組卡片」而不是單一大表格，跟 standings/batting/
-pitching 用的表格式解析不同，所以這裡不套用 parse_table，而是走卡片式的
-CSS selector 解析。這個頁面的版面在各球季改版機率最高，若解析失敗，
-請先用瀏覽器「檢視原始碼」確認目前卡片的 class 名稱，更新下面的
+官網賽程頁面確認過是 Vue.js 的單頁應用（SPA）：伺服器回來的原始 HTML
+只有年份/月份/比賽類型的篩選下拉選單，實際賽程卡片是瀏覽器執行 JavaScript
+後才動態塞進畫面，用一般的 requests 拿到的 HTML 永遠是空殼、看不到任何
+比賽資料。因此這裡改用 get_rendered_html()（Playwright + headless
+Chromium）取得瀏覽器實際渲染完的 DOM，再用跟其他頁面一樣的 CSS selector
+方式解析。
+
+跟 standings/batting/pitching 用的表格式解析不同，這裡不套用 parse_table，
+而是走卡片式的 CSS selector 解析。這個頁面的版面在各球季改版機率最高，
+若解析失敗，請先用瀏覽器「檢視原始碼」確認目前卡片的 class 名稱，更新下面的
 GAME_CARD_SELECTOR 等常數。
 """
 from __future__ import annotations
@@ -13,7 +19,7 @@ from dataclasses import dataclass
 from bs4 import BeautifulSoup
 
 from cpbl_analytics.config import URLS
-from cpbl_analytics.scraper.http import ParsingError, get_html
+from cpbl_analytics.scraper.http import ParsingError, get_rendered_html
 
 GAME_CARD_SELECTOR = ".game, .schedule_game, li.game"
 DATE_SELECTOR = ".date, .game_date"
@@ -60,7 +66,7 @@ class GameResult:
 
 def fetch_schedule(*, html: str | None = None) -> list[GameResult]:
     if html is None:
-        html = get_html(URLS["schedule"])
+        html = get_rendered_html(URLS["schedule"])
 
     soup = BeautifulSoup(html, "lxml")
     cards = soup.select(GAME_CARD_SELECTOR)

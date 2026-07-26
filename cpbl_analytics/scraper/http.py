@@ -124,3 +124,49 @@ def _request(url: str, *, params: dict | None) -> requests.Response:
         )
     except requests.RequestException as exc:
         raise FetchError(f"無法連線到 {url}: {exc}") from exc
+
+
+def get_rendered_html(
+    url: str,
+    *,
+    wait_selector: str | None = None,
+    timeout_ms: int = 20000,
+) -> str:
+    """用真的瀏覽器（Playwright + headless Chromium）載入網頁後回傳渲染完的 HTML。
+
+    給 requests 抓不到資料的頁面用——例如賽程頁其實是 Vue.js 的單頁應用，
+    伺服器回來的原始 HTML 只有篩選用的下拉選單，實際賽程卡片是瀏覽器執行
+    JavaScript 之後才動態塞進 DOM，用 requests 永遠只會看到空殼。
+
+    Args:
+        wait_selector: 若提供，會等到頁面上出現符合這個 CSS selector 的元素
+            才回傳（避免內容還沒渲染完就把 HTML 截走）；不提供則只等到
+            網路閒置（"networkidle"）。
+        timeout_ms: 等待逾時時間（毫秒）。
+
+    Raises:
+        FetchError: 瀏覽器啟動失敗、頁面載入逾時等問題。
+    """
+    host = requests.utils.urlparse(url).netloc
+    _throttle(host)
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise FetchError(
+            "需要安裝 playwright 才能抓取這個頁面（pip install playwright && "
+            "playwright install chromium）。"
+        ) from exc
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            try:
+                page = browser.new_page(user_agent=REQUEST_HEADERS.get("User-Agent"))
+                page.goto(url, wait_until="networkidle", timeout=timeout_ms)
+                if wait_selector:
+                    page.wait_for_selector(wait_selector, timeout=timeout_ms)
+                return page.content()
+            finally:
+                browser.close()
+    except Exception as exc:  # noqa: BLE001 - playwright 例外型別繁多，統一轉成 FetchError
+        raise FetchError(f"用瀏覽器載入 {url} 失敗：{exc}") from exc

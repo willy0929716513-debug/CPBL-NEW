@@ -27,11 +27,27 @@ def _read(name: str) -> str:
 
 def test_fetch_standings_parses_all_teams():
     standings = fetch_standings(html=_read("standings_sample.html"))
-    assert len(standings) == 6
-    assert standings[0].team_name == "中信兄弟"
-    assert standings[0].wins == 62
-    assert standings[0].losses == 38
-    assert standings[0].win_pct == pytest.approx(0.620, abs=1e-3)
+    assert len(standings) == 2
+    rakuten = next(s for s in standings if s.team_name == "樂天桃猿")
+    assert rakuten.rank == 1
+    assert rakuten.games == 13
+    assert rakuten.wins == 8
+    assert rakuten.ties == 0
+    assert rakuten.losses == 5
+    assert rakuten.win_pct == pytest.approx(0.615, abs=1e-3)
+    assert rakuten.home_record == "4-0-2"
+    assert rakuten.away_record == "4-0-3"
+    assert rakuten.streak == "勝2"
+    assert rakuten.last_10 == "6-0-4"
+
+    lions = next(s for s in standings if s.team_name == "統一7-ELEVEn獅")
+    assert lions.rank == 3
+    assert lions.games == 14
+    assert lions.wins == 7
+    assert lions.ties == 0
+    assert lions.losses == 7
+    assert lions.win_pct == pytest.approx(0.5, abs=1e-3)
+    assert lions.elimination_number == "46"
 
 
 def test_fetch_standings_raises_on_missing_required_column():

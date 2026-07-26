@@ -49,7 +49,28 @@ def test_missing_header_error_includes_raw_html():
 
     message = str(exc_info.value)
     assert "打數" in message  # 缺少的欄位名稱有提到
-    assert "<table>" in message  # 原始 HTML 片段有附上
+    assert "<th>球員</th>" in message  # 表頭列原始 HTML 有附上
+    assert "王小明" in message  # 第一列資料原始 HTML 也有附上
+
+
+def test_diagnostics_strip_html_comments_so_real_data_is_not_truncated_away():
+    # 官網原始碼常常在表頭裡塞大段開發註解，這些註解不該把截斷長度佔滿、
+    # 害真正需要看的欄位資訊被擠掉。
+    html = """
+    <table>
+      <thead><tr>
+        <!-- 這是一大段沒有用的開發註解，應該要被拿掉，不要佔用截斷長度 -->
+        <th>球員</th>
+      </tr></thead>
+      <tbody><tr><td>王小明</td></tr></tbody>
+    </table>
+    """
+    with pytest.raises(ParsingError) as exc_info:
+        parse_table(html, table_selector="table", columns=COLUMNS)
+
+    message = str(exc_info.value)
+    assert "沒有用的開發註解" not in message
+    assert "王小明" in message
 
 
 def test_normal_matching_cell_count_still_works():
