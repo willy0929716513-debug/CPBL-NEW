@@ -106,6 +106,15 @@ def fetch_schedule(*, html: str | None = None) -> list[GameResult]:
         )
 
     if not games:
-        raise ParsingError("解析出的賽程清單為空。")
+        first_card_html = str(cards[0])
+        if len(first_card_html) > 3000:
+            first_card_html = first_card_html[:3000] + f"...(截斷，完整長度 {len(first_card_html)} 字元)"
+        raise ParsingError(
+            f"用 selector {GAME_CARD_SELECTOR!r} 找到 {len(cards)} 個疑似賽程卡片的元素，"
+            f"但每一個裡面符合 TEAM_SELECTOR={TEAM_SELECTOR!r} 的元素都不到 2 個，"
+            "所以一場比賽都沒解析出來。可能是 GAME_CARD_SELECTOR 抓到了不相關的元素"
+            "（例如篩選用的下拉選單），或是 TEAM_SELECTOR 對不上真正球隊名稱的 class。\n"
+            f"第一個疑似卡片的原始 HTML（截斷）：\n{first_card_html}"
+        )
 
     return games
