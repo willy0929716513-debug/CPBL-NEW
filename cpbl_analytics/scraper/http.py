@@ -239,8 +239,14 @@ def _select_and_verify(
         # 切換動作執行了，但畫面看起來還是切換前的樣子——常見原因是
         # 這種查詢頁面選完選項後還需要手動按「查詢/搜尋」才會真的送出，
         # 這裡多嘗試一步，而不是直接把舊內容當新內容回傳。
+        #
+        # 優先找真正的 <button>（語意上比較可能是送出動作），文字比對
+        # 找到的東西很容易誤中網頁上其他剛好包含「查詢」兩個字的連結
+        # （例如麵包屑導覽「全記錄查詢」），那種元素通常本來就點不了、
+        # 點了也不會有作用。
         (
-            _try_click_by_text(page, "查詢", exact=False)
+            _try_click_button_by_text(page, ["查詢", "搜尋", "送出", "Search"])
+            or _try_click_by_text(page, "查詢", exact=False)
             or _try_click_by_text(page, "搜尋", exact=False)
             or _try_click_by_text(page, "送出", exact=False)
         )
@@ -290,12 +296,39 @@ def _try_click_by_text(page, option_text: str, *, exact: bool) -> bool:
     在目前頁面上完全沒有符合的元素時，click() 預設行為是「一直等到超時」，
     這樣三種策略（select、精確文字、模糊文字）疊在一起試，很容易單一個策略
     就把整個逾時預算耗光，導致明明第三種策略可能秒選到，卻永遠等不到那一步。
+
+    找到元素、但實際點擊失敗（例如模糊比對抓到一個不相關、看起來不可點擊
+    的元素，像是麵包屑導覽列裡剛好包含這幾個字的連結）也視為「這個策略沒用」
+    回傳 False，而不是讓例外整個往上炸——不然後面「搜尋」「送出」這些備用
+    策略、以及最後那個帶著完整診斷資訊的錯誤訊息，都永遠沒有機會執行到。
     """
     locator = page.get_by_text(option_text, exact=exact).first
     if locator.count() == 0:
         return False
-    locator.click(timeout=3000)
+    try:
+        locator.click(timeout=3000)
+    except Exception:  # noqa: BLE001 - 點擊失敗一律當成「這個策略沒用」，換下一個試
+        return False
     return True
+
+
+def _try_click_button_by_text(page, texts: list[str]) -> bool:
+    """在真正的 <button> 元素裡找文字包含 texts 其中之一的，找到就點下去。
+
+    比起「頁面上任何文字等於 XXX 的元素」，限定在 <button> 標籤裡找更精準
+    ——像麵包屑導覽「全記錄查詢」這種連結，文字上會誤中「查詢」兩個字，
+    但語意上根本不是一個表單送出按鈕。
+    """
+    for text in texts:
+        locator = page.locator("button", has_text=text).first
+        if locator.count() == 0:
+            continue
+        try:
+            locator.click(timeout=3000)
+        except Exception:  # noqa: BLE001 - 點擊失敗一律當成「這個按鈕沒用」，換下一個文字試
+            continue
+        return True
+    return False
 
 
 def _goto_with_www_fallback(page, url: str, *, timeout_ms: int) -> None:

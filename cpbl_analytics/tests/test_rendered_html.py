@@ -18,6 +18,7 @@ from cpbl_analytics.scraper.http import (
     FetchError,
     _goto_with_www_fallback,
     _select_and_verify,
+    _try_click_button_by_text,
     _try_click_by_text,
     _try_select_option,
     get_rendered_html,
@@ -143,14 +144,78 @@ def test_try_click_by_text_clicks_when_locator_finds_something():
     locator.click.assert_called_once()
 
 
+def test_try_click_by_text_returns_false_instead_of_raising_when_click_fails():
+    # 這次真的在 GitHub Actions 上發生的情況：模糊比對「查詢」意外抓到一個
+    # 麵包屑導覽連結「全記錄查詢」，那個元素找得到（count()==1）但點不了
+    # （不可見），click() 逾時丟出例外。這個例外不該往上炸，否則後面
+    # 「搜尋」「送出」等備用策略、以及最後帶完整診斷的錯誤訊息都不會執行到。
+    page = Mock()
+    locator = Mock()
+    locator.count.return_value = 1
+    locator.click.side_effect = TimeoutError("Locator.click: Timeout 3000ms exceeded.")
+    page.get_by_text.return_value.first = locator
+
+    assert _try_click_by_text(page, "查詢", exact=False) is False
+
+
+def test_try_click_button_by_text_prefers_real_button_over_unrelated_text():
+    page = Mock()
+    button = Mock()
+    button.count.return_value = 1
+    page.locator.return_value.first = button
+
+    assert _try_click_button_by_text(page, ["查詢", "搜尋"]) is True
+    button.click.assert_called_once()
+
+
+def test_try_click_button_by_text_tries_next_text_when_no_button_matches_first():
+    page = Mock()
+    no_button = Mock()
+    no_button.count.return_value = 0
+    yes_button = Mock()
+    yes_button.count.return_value = 1
+    page.locator.return_value.first = no_button
+
+    def locator_side_effect(_tag, has_text=None):
+        loc = Mock()
+        loc.first = yes_button if has_text == "搜尋" else no_button
+        return loc
+
+    page.locator.side_effect = locator_side_effect
+
+    assert _try_click_button_by_text(page, ["查詢", "搜尋"]) is True
+    yes_button.click.assert_called_once()
+
+
+def test_try_click_button_by_text_returns_false_when_nothing_matches():
+    page = Mock()
+    no_button = Mock()
+    no_button.count.return_value = 0
+    page.locator.return_value.first = no_button
+
+    assert _try_click_button_by_text(page, ["查詢", "搜尋", "送出"]) is False
+
+
 def _page_with_selectable_option(option_texts: list[str]) -> Mock:
-    """回傳一個 page mock，其 <select> 選單能被 _try_select_option 選中。"""
+    """回傳一個 page mock，其 <select> 選單能被 _try_select_option 選中。
+
+    page.locator() 這次要依「選的是 select 還是 button」回傳不同的假物件
+    ——不然 _try_click_button_by_text() 也呼叫 page.locator("button", ...)，
+    如果跟 select 共用同一個 return_value，找按鈕那步會被誤判成「有找到」。
+    """
     page = Mock()
     select = _fake_select(option_texts)
     selects = Mock()
     selects.count.return_value = 1
     selects.nth.return_value = select
-    page.locator.return_value = selects
+
+    no_button_locator = Mock()
+    no_button_locator.first.count.return_value = 0
+
+    def locator_side_effect(tag, **kwargs):
+        return selects if tag == "select" else no_button_locator
+
+    page.locator.side_effect = locator_side_effect
     return page
 
 
