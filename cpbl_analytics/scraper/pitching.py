@@ -133,7 +133,9 @@ def fetch_pitching_stats(*, html: str | None = None, year: int | None = None) ->
         url = URLS["record_all"]
         if year:
             url = f"{url}?year={year}"
-        html = get_rendered_html_after_selecting(url, option_text="投手")
+        # 官網下拉選單裡這個選項實際顯示的文字是「投手成績」，不是單純的「投手」
+        # （已從實際錯誤訊息的 call log 確認：`locator resolved to <option value="02">投手成績</option>`）。
+        html = get_rendered_html_after_selecting(url, option_text="投手成績")
 
     rows = parse_table(html, table_selector=TABLE_SELECTOR, columns=COLUMNS)
 
