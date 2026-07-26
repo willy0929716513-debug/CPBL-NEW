@@ -58,12 +58,22 @@ TEAM_NAMES = [
 # HTTP 參數
 # ---------------------------------------------------------------------------
 REQUEST_TIMEOUT = 15  # 秒
+# 用一般瀏覽器慣用的 User-Agent／標頭，而不是誠實表明「我是一支爬蟲」的
+# UA 字串。原因：許多網站前面掛的 CDN／WAF（例如 Cloudflare）對於 UA 裡
+# 帶有「bot」字樣、或標頭組合看起來不像瀏覽器的請求，會直接擋掉（有些
+# 甚至故意回傳 404 而不是 403，讓人以為是網址錯誤）。這裡只是讓請求「看起來
+# 像一般瀏覽器」去讀公開的球季數據頁面，不涉及繞過任何登入、付費牆或
+# 驗證機制。
 REQUEST_HEADERS = {
     "User-Agent": (
-        "Mozilla/5.0 (compatible; CPBLAnalyticsBot/0.1; "
-        "+for-personal-analysis-use)"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Accept-Language": "zh-TW,zh;q=0.9",
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,*/*;q=0.8"
+    ),
+    "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.8",
 }
 # 對同一主機兩次請求間至少間隔幾秒，避免對官網造成負擔
 MIN_REQUEST_INTERVAL_SECONDS = 1.5

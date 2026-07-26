@@ -86,10 +86,30 @@ def get_html(url: str, *, params: dict | None = None) -> str:
         # 兩種都失敗的話，錯誤訊息仍然報告原本要求的那個網址，比較好追查設定檔。
 
     if resp.status_code != 200:
-        raise FetchError(f"{url} 回傳狀態碼 {resp.status_code}")
+        raise FetchError(f"{url} 回傳狀態碼 {resp.status_code}\n{_diagnose_response(resp)}")
 
     resp.encoding = resp.apparent_encoding or "utf-8"
     return resp.text
+
+
+def _diagnose_response(resp: requests.Response) -> str:
+    """把回應的關鍵標頭跟一小段內容附進錯誤訊息。
+
+    404／403 這類狀態碼有兩種完全不同的可能：官網真的把這個頁面拿掉了，
+    或者是前面擋了一層 CDN／WAF（例如 Cloudflare）把我們的請求當成機器人
+    擋下來，回傳的其實是一個「驗證頁」而不是官網真正的 404 頁。這兩種情況
+    修法完全不同（前者要改網址，後者要調整 headers／改變爬取方式），
+    附上回應標頭跟內容片段才分得出來是哪一種。
+    """
+    interesting_headers = ["server", "cf-ray", "cf-cache-status", "content-type", "x-cache"]
+    header_lines = [
+        f"  {h}: {resp.headers[h]}" for h in interesting_headers if h in resp.headers
+    ]
+    body_snippet = resp.text[:800] if resp.text else "(空)"
+    return (
+        "回應標頭：\n" + ("\n".join(header_lines) if header_lines else "  (無特別標頭)") + "\n"
+        f"回應內容片段：\n{body_snippet}"
+    )
 
 
 def _request(url: str, *, params: dict | None) -> requests.Response:
