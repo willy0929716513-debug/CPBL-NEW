@@ -206,6 +206,26 @@ def _truncate(text: str, *, limit: int = 4000) -> str:
     return text
 
 
+def _diagnostic_body_snippet(html: str, *, limit: int = 6000) -> str:
+    """把整頁 HTML 裡的 <head>／<script>／<style>／註解拿掉，只留 <body> 內容再截斷。
+
+    像 CPBL 官網這種傳統 ASP.NET + 一堆 CSS/JS 掛件（Google Tag Manager、
+    選單套件...）的頁面，光 <head> 就可能好幾千字元，如果直接對整份原始
+    HTML 做字元截斷，錯誤訊息裡塞的全是追蹤碼、樣式表連結，實際需要看的
+    表單／下拉選單／表格內容反而被擠到截斷範圍外面，完全看不到。
+    """
+    from bs4 import BeautifulSoup, Comment
+
+    soup = BeautifulSoup(html, "lxml")
+    for tag in soup(["script", "style", "link", "noscript", "meta"]):
+        tag.decompose()
+    for comment in soup.find_all(string=lambda s: isinstance(s, Comment)):
+        comment.extract()
+    body = soup.find("body")
+    raw = str(body) if body is not None else str(soup)
+    return _truncate(raw, limit=limit)
+
+
 def _select_and_verify(
     page,
     *,
@@ -229,7 +249,7 @@ def _select_and_verify(
         raise FetchError(
             f"在 {url} 上找不到任何可以切換到「{option_text}」的下拉選單選項，"
             "也找不到文字等於或包含這個字的可點擊元素。\n"
-            f"頁面渲染後的 HTML（截斷）：\n{_truncate(content)}"
+            f"頁面渲染後的 HTML（截斷）：\n{_diagnostic_body_snippet(content)}"
         )
 
     page.wait_for_load_state("networkidle", timeout=timeout_ms)
@@ -259,7 +279,7 @@ def _select_and_verify(
                 f"但畫面內容看起來仍然是切換前的樣子（仍然包含"
                 f"「{verify_text_absent}」）。可能這個下拉選單不是實際控制"
                 "這份資料的開關，或是還需要別的步驟才會真的重新查詢。\n"
-                f"頁面渲染後的 HTML（截斷）：\n{_truncate(content)}"
+                f"頁面渲染後的 HTML（截斷）：\n{_diagnostic_body_snippet(content)}"
             )
 
     return content

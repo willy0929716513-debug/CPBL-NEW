@@ -16,6 +16,7 @@ import pytest
 
 from cpbl_analytics.scraper.http import (
     FetchError,
+    _diagnostic_body_snippet,
     _goto_with_www_fallback,
     _select_and_verify,
     _try_click_button_by_text,
@@ -263,3 +264,29 @@ def test_select_and_verify_raises_when_stale_content_never_changes():
             page, url="https://example.com", option_text="投手成績",
             verify_text_absent="打擊率", timeout_ms=1000,
         )
+
+
+def test_diagnostic_body_snippet_strips_head_boilerplate_and_keeps_body():
+    # 這是修這支程式的實際原因：官網的 <head> 塞了一堆 Google Tag Manager、
+    # jQuery 選單套件等追蹤碼／樣式表，光 <head> 就吃光原本 4000 字元的
+    # 截斷長度，導致錯誤訊息裡完全看不到 <body> 裡真正需要看的表單/表格內容。
+    html = """
+    <html><head>
+      <script src="https://www.googletagmanager.com/gtm.js?id=GTM-XXXX"></script>
+      <style>.foo { color: red; }</style>
+      <link href="/theme/client/css/style.css" rel="stylesheet">
+      <!-- 一堆開發註解 -->
+      <title>全記錄查詢</title>
+    </head>
+    <body>
+      <select><option>打者成績</option><option>投手成績</option></select>
+      <table><tr><th>打擊率</th></tr></table>
+    </body></html>
+    """
+    snippet = _diagnostic_body_snippet(html, limit=6000)
+
+    assert "googletagmanager" not in snippet
+    assert "color: red" not in snippet
+    assert "一堆開發註解" not in snippet
+    assert "<select>" in snippet
+    assert "投手成績" in snippet
