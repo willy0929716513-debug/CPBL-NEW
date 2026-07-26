@@ -29,6 +29,7 @@ def _fake_response(status_code: int, text: str = "") -> Mock:
     resp.status_code = status_code
     resp.text = text
     resp.apparent_encoding = "utf-8"
+    resp.headers = {}  # 真的 dict，讓 `in` 判斷可以正常運作，而不是 Mock 的自動屬性
     return resp
 
 
