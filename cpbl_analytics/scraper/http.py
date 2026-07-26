@@ -182,24 +182,53 @@ def get_rendered_html_after_selecting(
     def _run(page):
         _goto_with_www_fallback(page, url, timeout_ms=timeout_ms)
 
-        selected = False
-        selects = page.locator("select")
-        for i in range(selects.count()):
-            sel = selects.nth(i)
-            option_texts = [t.strip() for t in sel.locator("option").all_inner_texts()]
-            if option_text in option_texts:
-                sel.select_option(label=option_text)
-                selected = True
-                break
-
-        if not selected:
-            candidate = page.get_by_text(option_text, exact=True).first
-            candidate.click(timeout=timeout_ms)
+        switched = (
+            _try_select_option(page, option_text)
+            or _try_click_by_text(page, option_text, exact=True)
+            or _try_click_by_text(page, option_text, exact=False)
+        )
+        if not switched:
+            content = page.content()
+            snippet = content[:4000] + (
+                f"...(截斷，完整長度 {len(content)} 字元)" if len(content) > 4000 else ""
+            )
+            raise FetchError(
+                f"在 {url} 上找不到任何可以切換到「{option_text}」的下拉選單選項，"
+                "也找不到文字等於或包含這個字的可點擊元素。\n"
+                f"頁面渲染後的 HTML（截斷）：\n{snippet}"
+            )
 
         page.wait_for_load_state("networkidle", timeout=timeout_ms)
         return page.content()
 
     return _with_rendered_page(url, _run, timeout_ms=timeout_ms)
+
+
+def _try_select_option(page, option_text: str) -> bool:
+    """找頁面上是不是有 <select> 選單裡有一個選項文字等於 option_text，有的話選取它。"""
+    selects = page.locator("select")
+    for i in range(selects.count()):
+        sel = selects.nth(i)
+        option_texts = [t.strip() for t in sel.locator("option").all_inner_texts()]
+        if option_text in option_texts:
+            sel.select_option(label=option_text)
+            return True
+    return False
+
+
+def _try_click_by_text(page, option_text: str, *, exact: bool) -> bool:
+    """找畫面上文字等於（或包含）option_text 的可點擊元素並點下去。
+
+    先用 count() 確認真的有找到元素才點擊，而不是直接呼叫 click()——locator
+    在目前頁面上完全沒有符合的元素時，click() 預設行為是「一直等到超時」，
+    這樣三種策略（select、精確文字、模糊文字）疊在一起試，很容易單一個策略
+    就把整個逾時預算耗光，導致明明第三種策略可能秒選到，卻永遠等不到那一步。
+    """
+    locator = page.get_by_text(option_text, exact=exact).first
+    if locator.count() == 0:
+        return False
+    locator.click(timeout=3000)
+    return True
 
 
 def _goto_with_www_fallback(page, url: str, *, timeout_ms: int) -> None:
