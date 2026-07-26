@@ -135,7 +135,12 @@ def fetch_pitching_stats(*, html: str | None = None, year: int | None = None) ->
             url = f"{url}?year={year}"
         # 官網下拉選單裡這個選項實際顯示的文字是「投手成績」，不是單純的「投手」
         # （已從實際錯誤訊息的 call log 確認：`locator resolved to <option value="02">投手成績</option>`）。
-        html = get_rendered_html_after_selecting(url, option_text="投手成績")
+        # verify_text_absent="打擊率"：這是打者表才有的表頭，之前選了這個選項後
+        # 抓到的還是一模一樣的打者資料，代表光呼叫 select_option() 沒有真的觸發
+        # 這個查詢頁面重新查詢，需要再確認一次畫面是否真的換成投手資料。
+        html = get_rendered_html_after_selecting(
+            url, option_text="投手成績", verify_text_absent="打擊率"
+        )
 
     rows = parse_table(html, table_selector=TABLE_SELECTOR, columns=COLUMNS)
 
