@@ -52,6 +52,13 @@ def _throttle(host: str) -> None:
     _last_request_time[host] = time.monotonic()
 
 
+def _swap_www(url: str) -> str:
+    """把網址的 host 在「有 www.」跟「沒有 www.」之間互換。"""
+    if "://www." in url:
+        return url.replace("://www.", "://", 1)
+    return url.replace("://", "://www.", 1)
+
+
 @retry(
     reraise=True,
     stop=stop_after_attempt(MAX_RETRIES),
@@ -61,13 +68,35 @@ def _throttle(host: str) -> None:
 def get_html(url: str, *, params: dict | None = None) -> str:
     """抓取一個網頁的 HTML 原始碼，含節流與重試。
 
+    如果目前這個網址回傳 404，會自動改試「有無 www.」的另一個變體再試一次
+    ——CPBL 官網 www / 非 www 兩個網域，過去觀察到不一定每個路徑都同時
+    存在（例如其中一個網域只有首頁能連，深層路徑會 404），與其要求每次
+    改版都手動猜測、調整設定檔，不如讓爬蟲自己多試一種寫法。
+
     Raises:
-        FetchError: 連線失敗或回傳非 2xx 狀態碼（重試 MAX_RETRIES 次後仍失敗）。
+        FetchError: 兩種網址變體都連不上或回傳非 2xx 狀態碼（重試 MAX_RETRIES 次後仍失敗）。
     """
+    resp = _request(url, params=params)
+    if resp.status_code == 404:
+        alt_url = _swap_www(url)
+        alt_resp = _request(alt_url, params=params)
+        if alt_resp.status_code == 200:
+            alt_resp.encoding = alt_resp.apparent_encoding or "utf-8"
+            return alt_resp.text
+        # 兩種都失敗的話，錯誤訊息仍然報告原本要求的那個網址，比較好追查設定檔。
+
+    if resp.status_code != 200:
+        raise FetchError(f"{url} 回傳狀態碼 {resp.status_code}")
+
+    resp.encoding = resp.apparent_encoding or "utf-8"
+    return resp.text
+
+
+def _request(url: str, *, params: dict | None) -> requests.Response:
     host = requests.utils.urlparse(url).netloc
     _throttle(host)
     try:
-        resp = requests.get(
+        return requests.get(
             url,
             params=params,
             headers=REQUEST_HEADERS,
@@ -75,9 +104,3 @@ def get_html(url: str, *, params: dict | None = None) -> str:
         )
     except requests.RequestException as exc:
         raise FetchError(f"無法連線到 {url}: {exc}") from exc
-
-    if resp.status_code != 200:
-        raise FetchError(f"{url} 回傳狀態碼 {resp.status_code}")
-
-    resp.encoding = resp.apparent_encoding or "utf-8"
-    return resp.text
