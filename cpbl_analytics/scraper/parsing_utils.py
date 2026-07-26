@@ -14,12 +14,30 @@ ParsingError，逼你在第一時間發現「資料源頭已經跟程式預期�
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from bs4 import BeautifulSoup, Comment
 from bs4.element import Tag
 
 from cpbl_analytics.scraper.http import ParsingError
+
+_LEADING_RANK_RE = re.compile(r"^\s*(\d+)\s*(.*)$", re.DOTALL)
+
+
+def split_leading_rank(raw: str) -> tuple[int | None, str]:
+    """拆出合併儲存格開頭的排名數字，回傳 (排名, 剩下的文字)。
+
+    官網好幾個頁面（球隊戰績、打者/投手全記錄查詢）都把「排名」跟後面的
+    名稱（球隊、或「球隊+球員」）塞進同一個儲存格，用巢狀 <div>／<span>
+    並排顯示，get_text() 撈出來的內容形如 "1\\n樂天桃猿" 或
+    "1\\n台鋼雄鷹\\n曾子祐"。這裡只負責拆掉最前面的排名數字，剩下的部分
+    交給呼叫端依各自頁面的實際結構（一段 vs. 兩段）繼續拆。
+    """
+    match = _LEADING_RANK_RE.match(raw)
+    if match:
+        return int(match.group(1)), match.group(2).strip()
+    return None, raw.strip()
 
 
 def _clean_text(text: str) -> str:
@@ -111,16 +129,23 @@ def parse_table(
             parts.append("（表格目前沒有任何資料列）")
         return "\n".join(parts)
 
-    # 建立「表頭文字 -> 欄位索引」的對應
+    # 建立「表頭文字 -> 欄位索引」的對應。
+    #
+    # 每個別名都先找「完全相等」的表頭，找不到才退而求其次找「表頭文字
+    # 包含這個別名」的——不能反過來（先掃到誰就用誰），否則像 "盜壘" 這種
+    # 別名可能會意外先比對到 "盜壘刺" 這個包含它的、但語意完全不同的欄位，
+    # 純粹取決於兩個表頭在 DOM 裡誰先出現，而不是誰的語意才是對的。
     index_of_field: dict[str, int] = {}
     for spec in columns:
         found_index = None
         for alias in spec.header_aliases:
-            for idx, text in enumerate(header_texts):
-                if text == alias or alias in text:
-                    found_index = idx
-                    break
-            if found_index is not None:
+            exact_index = next((idx for idx, text in enumerate(header_texts) if text == alias), None)
+            if exact_index is not None:
+                found_index = exact_index
+                break
+            partial_index = next((idx for idx, text in enumerate(header_texts) if alias in text), None)
+            if partial_index is not None:
+                found_index = partial_index
                 break
         if found_index is None:
             if spec.required:
@@ -195,8 +220,20 @@ def _find_body_rows(table: Tag, header_row_selector: str) -> list[Tag]:
     return body_rows
 
 
+def _strip_wrapping_parens(v: str) -> str:
+    """去掉數字外層的括號，例如官網「（故四）」欄位底下的值會寫成「（0）」。
+
+    半形/全形括號都處理，因為不同欄位/不同球季看到的是哪一種不一定。
+    """
+    v = v.strip()
+    for open_p, close_p in (("（", "）"), ("(", ")")):
+        if v.startswith(open_p) and v.endswith(close_p):
+            v = v[len(open_p) : -len(close_p)].strip()
+    return v
+
+
 def to_int(value: str, *, field: str, allow_dash_as_zero: bool = True) -> int:
-    v = value.replace(",", "").strip()
+    v = _strip_wrapping_parens(value.replace(",", "").strip())
     if v in ("", "-", "--") and allow_dash_as_zero:
         return 0
     try:
@@ -206,7 +243,7 @@ def to_int(value: str, *, field: str, allow_dash_as_zero: bool = True) -> int:
 
 
 def to_float(value: str, *, field: str, allow_dash_as_zero: bool = True) -> float:
-    v = value.replace(",", "").strip()
+    v = _strip_wrapping_parens(value.replace(",", "").strip())
     if v in ("", "-", "--") and allow_dash_as_zero:
         return 0.0
     try:

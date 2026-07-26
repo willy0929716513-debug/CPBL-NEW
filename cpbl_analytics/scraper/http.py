@@ -147,6 +147,85 @@ def get_rendered_html(
     Raises:
         FetchError: 瀏覽器啟動失敗、頁面載入逾時等問題。
     """
+    def _run(page):
+        _goto_with_www_fallback(page, url, timeout_ms=timeout_ms)
+        if wait_selector:
+            page.wait_for_selector(wait_selector, timeout=timeout_ms)
+        return page.content()
+
+    return _with_rendered_page(url, _run, timeout_ms=timeout_ms)
+
+
+def get_rendered_html_after_selecting(
+    url: str,
+    *,
+    option_text: str,
+    timeout_ms: int = 20000,
+) -> str:
+    """載入網頁後，切換到某個分頁／篩選選項，再回傳切換後的渲染結果。
+
+    用於「打者/投手/守備」這種同一個網址、用 Vue 前端在畫面上切換分頁的頁面
+    ——切換分頁不會改變網址，用一般 requests 永遠只會拿到預設分頁（通常是
+    打者）的資料。這裡會先找頁面上有沒有 <select> 選單裡有一個選項文字
+    等於 option_text（原生下拉選單要用 select_option，直接點擊 <option>
+    在瀏覽器自動化裡不可靠），找不到的話再退而求其次，找畫面上文字等於
+    option_text 的可點擊元素直接點下去（分頁式 tab 常見的做法）。
+
+    Args:
+        option_text: 要切換過去的分頁/選項文字，例如「投手」。
+
+    Raises:
+        FetchError: 瀏覽器啟動失敗、頁面載入逾時、或完全找不到符合的
+            切換元素。
+    """
+
+    def _run(page):
+        _goto_with_www_fallback(page, url, timeout_ms=timeout_ms)
+
+        selected = False
+        selects = page.locator("select")
+        for i in range(selects.count()):
+            sel = selects.nth(i)
+            option_texts = [t.strip() for t in sel.locator("option").all_inner_texts()]
+            if option_text in option_texts:
+                sel.select_option(label=option_text)
+                selected = True
+                break
+
+        if not selected:
+            candidate = page.get_by_text(option_text, exact=True).first
+            candidate.click(timeout=timeout_ms)
+
+        page.wait_for_load_state("networkidle", timeout=timeout_ms)
+        return page.content()
+
+    return _with_rendered_page(url, _run, timeout_ms=timeout_ms)
+
+
+def _goto_with_www_fallback(page, url: str, *, timeout_ms: int) -> None:
+    """瀏覽器導航到網址，跟 get_html() 一樣：404 的話自動改試「有無 www.」
+    的另一個變體。
+
+    Playwright 用真的瀏覽器渲染頁面，跟 get_html() 走的是完全不同的
+    程式碼路徑，這裡要重做一次一樣的 www / 非 www 容錯，不然只有靜態
+    HTTP 請求那條路徑會自動修正網址、瀏覽器渲染這條路徑遇到官網 www/非 www
+    其中一個 404 時還是會直接失敗。
+    """
+    response = page.goto(url, wait_until="networkidle", timeout=timeout_ms)
+    if response is not None and response.status == 404:
+        alt_url = _swap_www(url)
+        alt_response = page.goto(alt_url, wait_until="networkidle", timeout=timeout_ms)
+        if alt_response is not None and alt_response.status == 200:
+            return
+        raise FetchError(
+            f"{url}（狀態碼 404）與 {alt_url}"
+            f"（狀態碼 {alt_response.status if alt_response is not None else '無回應'}）都連不上。"
+        )
+    if response is not None and response.status != 200:
+        raise FetchError(f"{url} 回傳狀態碼 {response.status}")
+
+
+def _with_rendered_page(url: str, run, *, timeout_ms: int) -> str:
     host = requests.utils.urlparse(url).netloc
     _throttle(host)
     try:
@@ -162,10 +241,7 @@ def get_rendered_html(
             browser = p.chromium.launch(headless=True)
             try:
                 page = browser.new_page(user_agent=REQUEST_HEADERS.get("User-Agent"))
-                page.goto(url, wait_until="networkidle", timeout=timeout_ms)
-                if wait_selector:
-                    page.wait_for_selector(wait_selector, timeout=timeout_ms)
-                return page.content()
+                return run(page)
             finally:
                 browser.close()
     except Exception as exc:  # noqa: BLE001 - playwright 例外型別繁多，統一轉成 FetchError

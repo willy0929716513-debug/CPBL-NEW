@@ -1,18 +1,31 @@
-"""投手「全記錄查詢」scraper：抓取球員完整季度投球數據。"""
+"""投手「全記錄查詢」scraper：抓取球員完整季度投球數據。
+
+這個頁面跟 batting.py 用的是同一個網址（`config.URLS["record_all"]`），
+預設顯示的是打者分頁；官網用前端 Vue 元件切換「打者/投手/守備」，
+不會改變網址，所以這裡改用 get_rendered_html_after_selecting()
+（Playwright 實際點選/切換到「投手」分頁後，再讀取渲染完的結果）。
+
+跟 batting.py 一樣，「排名」跟「球員」是合併儲存格（形如
+"1\\n中信兄弟\\n投手名字"），見 _split_team_and_player()。
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 from cpbl_analytics.config import URLS
-from cpbl_analytics.scraper.http import ParsingError, get_html
-from cpbl_analytics.scraper.parsing_utils import ColumnSpec, parse_table, to_float, to_int
+from cpbl_analytics.scraper.http import ParsingError, get_rendered_html_after_selecting
+from cpbl_analytics.scraper.parsing_utils import (
+    ColumnSpec,
+    parse_table,
+    split_leading_rank,
+    to_float,
+    to_int,
+)
 
 TABLE_SELECTOR = "table.RecordTable, table.record_table, table"
 
 COLUMNS = [
-    ColumnSpec(("排名",), "rank", required=False),
-    ColumnSpec(("球員", "選手", "姓名"), "player_name"),
-    ColumnSpec(("球隊", "隊伍"), "team_name"),
+    ColumnSpec(("球員", "選手", "姓名", "排名"), "rank_team_player_raw"),
     ColumnSpec(("出賽數", "出賽"), "games"),
     ColumnSpec(("先發", "GS"), "games_started", required=False),
     ColumnSpec(("完投", "CG"), "complete_games", required=False),
@@ -101,15 +114,33 @@ def parse_innings_to_outs(raw: str, *, field: str = "innings_pitched") -> int:
     return int(raw) * 3
 
 
+def _split_team_and_player(raw: str) -> tuple[int | None, str, str]:
+    """把合併儲存格（例如 "1\\n中信兄弟\\n投手名字"）拆成 (排名, 球隊, 投手)。"""
+    rank, remainder = split_leading_rank(raw)
+    parts = remainder.split()
+    if len(parts) < 2:
+        raise ParsingError(
+            f"無法從合併儲存格「{raw}」拆出球隊與球員名稱"
+            "（預期格式是「排名 球隊 球員」，官網可能已改版，請檢查 pitching.py 的解析邏輯）。"
+        )
+    team_name = parts[0]
+    player_name = " ".join(parts[1:])
+    return rank, team_name, player_name
+
+
 def fetch_pitching_stats(*, html: str | None = None, year: int | None = None) -> list[PitchingStat]:
     if html is None:
-        params = {"year": year} if year else None
-        html = get_html(URLS["record_all"], params=params)
+        url = URLS["record_all"]
+        if year:
+            url = f"{url}?year={year}"
+        html = get_rendered_html_after_selecting(url, option_text="投手")
 
     rows = parse_table(html, table_selector=TABLE_SELECTOR, columns=COLUMNS)
 
     stats: list[PitchingStat] = []
     for row in rows:
+        rank, team_name, player_name = _split_team_and_player(row["rank_team_player_raw"])
+
         def gi(field: str) -> int:
             return to_int(row.get(field, "0"), field=field)
 
@@ -118,8 +149,9 @@ def fetch_pitching_stats(*, html: str | None = None, year: int | None = None) ->
 
         stats.append(
             PitchingStat(
-                player_name=row["player_name"],
-                team_name=row["team_name"],
+                player_name=player_name,
+                team_name=team_name,
+                rank=rank,
                 games=gi("games"),
                 games_started=gi("games_started"),
                 complete_games=gi("complete_games"),
@@ -141,7 +173,6 @@ def fetch_pitching_stats(*, html: str | None = None, year: int | None = None) ->
                 earned_runs=gi("earned_runs"),
                 era=gf("era"),
                 whip=gf("whip") if row.get("whip") else None,
-                rank=gi("rank") if row.get("rank") else None,
             )
         )
 
