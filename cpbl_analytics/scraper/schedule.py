@@ -23,6 +23,26 @@ STATUS_SELECTOR = ".state, .status"
 VENUE_SELECTOR = ".place, .venue"
 
 
+def _diagnostic_html_snippet(soup: BeautifulSoup, *, limit: int = 4000) -> str:
+    """找一個「看起來最可能是賽程區塊」的元素，回傳其原始 HTML（截斷）。
+
+    優先找 class/id 名稱裡帶有 schedule/game/box 的元素（大概率就是我們要找
+    的容器），找不到就退回整個 <body>。這樣錯誤訊息裡附的原始碼，能直接讓人
+    比對出目前正確的 class 名稱該怎麼寫，不用再往返一次「你重跑一次工作流程、
+    我再看 log」。
+    """
+    import re
+
+    candidate = soup.find(
+        attrs={"class": re.compile(r"schedule|game|box", re.IGNORECASE)}
+    ) or soup.find(attrs={"id": re.compile(r"schedule|game|box", re.IGNORECASE)})
+    target = candidate if candidate is not None else soup.find("body") or soup
+    raw = str(target)
+    if len(raw) > limit:
+        return raw[:limit] + f"...(截斷，完整長度 {len(raw)} 字元)"
+    return raw
+
+
 @dataclass
 class GameResult:
     date: str
@@ -47,7 +67,9 @@ def fetch_schedule(*, html: str | None = None) -> list[GameResult]:
     if not cards:
         raise ParsingError(
             f"找不到任何賽程卡片（selector={GAME_CARD_SELECTOR!r}）。"
-            "官網賽程頁版面可能已改版，請更新 schedule.py 裡的 selector 常數。"
+            "官網賽程頁版面可能已改版，請更新 schedule.py 裡的 selector 常數。\n"
+            f"頁面原始 HTML 片段（截斷，方便直接比對真實 class 名稱）：\n"
+            f"{_diagnostic_html_snippet(soup)}"
         )
 
     games: list[GameResult] = []

@@ -202,7 +202,9 @@ Streamlit 網頁版亦已用 `streamlit.testing.v1.AppTest` 對全部 7 個頁�
   需要打開瀏覽器實際確認現在正確的網址，回報給我更新 `config.py` 的 `URLS`。
 - 如果是「執行爬蟲與資料驗證」這步失敗且訊息是 `ParsingError`，代表官網
   改版、欄位表頭或賽程頁 CSS selector 跟程式預期的對不上，需要更新
-  `cpbl_analytics/scraper/` 裡對應的檔案（見上面「已知限制」）。
+  `cpbl_analytics/scraper/` 裡對應的檔案（見上面「已知限制」）。這種錯誤
+  訊息會直接附上「實際表頭」跟「一小段原始 HTML」，把完整錯誤訊息複製
+  貼給我就能直接修，不需要自己動手改程式碼。
 - 如果是「提交更新後的資料快照」這步失敗，通常是 Settings → Actions →
   General → Workflow permissions 還沒設成 `Read and write permissions`
   （見「全自動雲端版」設定步驟第 1 步）。

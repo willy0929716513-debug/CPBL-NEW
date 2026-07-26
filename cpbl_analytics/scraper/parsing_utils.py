@@ -26,6 +26,20 @@ def _clean_text(text: str) -> str:
     return text.replace("\xa0", " ").replace("　", " ").strip()
 
 
+def _raw_snippet(tag: Tag, *, limit: int = 2500) -> str:
+    """回傳一個標籤的原始 HTML（截斷），塞進錯誤訊息方便直接比對真實結構。
+
+    只看清理過的文字（表頭字串、儲存格文字）有時候看不出問題，例如：
+    表頭用 colspan 合併了好幾個實際資料欄位、資料其實是圖片的 alt 文字、
+    欄位裡藏著我們沒預期到的巢狀標籤。附上原始 HTML，之後不用再往返
+    一次「你重跑一次、我再看 log」，可以直接從這次的錯誤訊息判斷怎麼修。
+    """
+    raw = str(tag)
+    if len(raw) > limit:
+        return raw[:limit] + f"...(截斷，完整長度 {len(raw)} 字元)"
+    return raw
+
+
 @dataclass(frozen=True)
 class ColumnSpec:
     """一個欄位的定義。
@@ -64,7 +78,10 @@ def parse_table(
 
     header_cells = _find_header_cells(table, header_row_selector)
     if not header_cells:
-        raise ParsingError("找不到表頭列（<th>），無法確認欄位對應關係。")
+        raise ParsingError(
+            "找不到表頭列（<th>），無法確認欄位對應關係。\n"
+            f"表格原始 HTML（截斷）：\n{_raw_snippet(table)}"
+        )
 
     header_texts = [_clean_text(c.get_text()) for c in header_cells]
 
@@ -84,14 +101,35 @@ def parse_table(
                 raise ParsingError(
                     f"表格缺少必要欄位「{spec.field}」"
                     f"（預期表頭別名：{spec.header_aliases}，"
-                    f"實際表頭：{header_texts}）。官網可能已改版。"
+                    f"實際表頭：{header_texts}）。官網可能已改版。\n"
+                    f"表格原始 HTML（截斷）：\n{_raw_snippet(table)}"
                 )
             continue
         index_of_field[spec.field] = found_index
 
     body_rows = _find_body_rows(table, header_row_selector)
     if not body_rows:
-        raise ParsingError("表格沒有任何資料列（可能是空賽季、或版面改變）。")
+        raise ParsingError(
+            "表格沒有任何資料列（可能是空賽季、或版面改變）。\n"
+            f"表格原始 HTML（截斷）：\n{_raw_snippet(table)}"
+        )
+
+    # 安全檢查：如果資料列的儲存格數量「多於」表頭數量，很可能是表頭用了
+    # colspan 合併了好幾個實際資料欄位（例如一個「勝-和-敗」表頭底下其實是
+    # 3 個獨立的 <td>）。這種情況下用「表頭索引」去對應資料格會整批錯位，
+    # 而且不會被上面任何檢查攔到——所以在這裡明確擋下來，而不是讓錯的資料
+    # 流出去。
+    sample_row = body_rows[0]
+    sample_cell_count = len(sample_row.find_all(["td", "th"]))
+    if sample_cell_count > len(header_texts):
+        sample_cell_texts = [_clean_text(c.get_text()) for c in sample_row.find_all(["td", "th"])]
+        raise ParsingError(
+            f"資料列的儲存格數量（{sample_cell_count}）比表頭數量（{len(header_texts)}）多，"
+            "可能是表頭用 colspan 合併了多個實際欄位，用索引對應會整批錯位，所以先擋下來。\n"
+            f"表頭：{header_texts}\n"
+            f"第一列資料儲存格內容：{sample_cell_texts}\n"
+            f"表格原始 HTML（截斷）：\n{_raw_snippet(table)}"
+        )
 
     records: list[dict[str, str]] = []
     for row in body_rows:
