@@ -196,6 +196,10 @@ Streamlit 網頁版亦已用 `streamlit.testing.v1.AppTest` 對全部 7 個頁�
 
 **Q: GitHub Actions 的「定期更新 CPBL 資料」跑出紅色叉叉（失敗）**
 點進那次執行的 log 看是哪一步失敗：
+- 如果訊息是 `回傳狀態碼 404`：`scraper/http.py` 已經會自動在
+  `www.cpbl.com.tw` / `cpbl.com.tw`（有無 www.）兩種網址間自動切換一次，
+  如果兩種都 404，代表官網把這個頁面的路徑整個改掉了（不只是 www 差異），
+  需要打開瀏覽器實際確認現在正確的網址，回報給我更新 `config.py` 的 `URLS`。
 - 如果是「執行爬蟲與資料驗證」這步失敗且訊息是 `ParsingError`，代表官網
   改版、欄位表頭或賽程頁 CSS selector 跟程式預期的對不上，需要更新
   `cpbl_analytics/scraper/` 裡對應的檔案（見上面「已知限制」）。
