@@ -37,6 +37,9 @@ jobs:
       - name: 安裝相依套件
         run: pip install -r requirements.txt
 
+      - name: 安裝 Playwright 的瀏覽器（賽程頁是 JS 動態渲染，需要真的瀏覽器）
+        run: playwright install --with-deps chromium
+
       - name: 執行爬蟲與資料驗證
         run: python -m cpbl_analytics.cli scrape
 

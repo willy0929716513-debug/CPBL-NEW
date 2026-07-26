@@ -49,6 +49,9 @@ CREATE TABLE IF NOT EXISTS team_standings (
     ties INTEGER,
     win_pct REAL,
     games_behind TEXT,
+    elimination_number TEXT,
+    home_record TEXT,
+    away_record TEXT,
     last_10 TEXT,
     streak TEXT
 );
@@ -192,12 +195,14 @@ def save_standings(standings: list[TeamStanding], *, year: int | None = None) ->
         conn.executemany(
             """INSERT INTO team_standings
                (scraped_at, year, rank, team_name, games, wins, losses, ties,
-                win_pct, games_behind, last_10, streak)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                win_pct, games_behind, elimination_number, home_record,
+                away_record, last_10, streak)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 (
                     scraped_at, year, s.rank, s.team_name, s.games, s.wins, s.losses,
-                    s.ties, s.win_pct, s.games_behind, s.last_10, s.streak,
+                    s.ties, s.win_pct, s.games_behind, s.elimination_number,
+                    s.home_record, s.away_record, s.last_10, s.streak,
                 )
                 for s in standings
             ],
