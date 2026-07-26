@@ -7,26 +7,60 @@
 Chromium）取得瀏覽器實際渲染完的 DOM，再用跟其他頁面一樣的 CSS selector
 方式解析。
 
-跟 standings/batting/pitching 用的表格式解析不同，這裡不套用 parse_table，
-而是走卡片式的 CSS selector 解析。這個頁面的版面在各球季改版機率最高，
-若解析失敗，請先用瀏覽器「檢視原始碼」確認目前卡片的 class 名稱，更新下面的
-GAME_CARD_SELECTOR 等常數。
+官網目前的實際卡片結構（2026 球季，從真實錯誤訊息確認過）：
+
+```html
+<div class="game final">
+  <a href="/box?year=2026&kindCode=A&gameSno=167">
+    <div>
+      <div class="info">
+        <div class="place">亞太主</div>
+        <div class="game_no">167</div>
+      </div>
+      <div class="vs_box">
+        <div class="team away"><span title="樂天桃猿">樂天桃猿</span></div>
+        <div class="score">
+          <div class="num away">0</div>
+          <div class="text">:</div>
+          <div class="num home">1</div>
+        </div>
+        <div class="team home"><span title="統一7-ELEVEn獅">統一7-ELEVEn獅</span></div>
+      </div>
+    </div>
+  </a>
+</div>
+```
+
+- 比賽狀態是外層 `.game` 這個 div 自己的 class（例如 "final"），不是子元素裡的
+  獨立欄位；「客隊/主隊」「比分」也都是同一個 class 前綴（team/num）加上
+  away/home 兩個修飾字，而不是兩種不同名稱的獨立欄位。
+- 目前還沒找到「日期」在卡片本身以外的什麼地方（賽程頁面很可能是「一個日期
+  標題底下放好幾張當天的比賽卡片」，日期只在標題出現一次）。這裡先嘗試往前
+  找最近一個看起來像日期標題的元素，找不到就留空，不會因此讓整批資料解析失敗。
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from bs4 import BeautifulSoup
+from bs4.element import Tag
 
 from cpbl_analytics.config import URLS
 from cpbl_analytics.scraper.http import ParsingError, get_rendered_html
 
-GAME_CARD_SELECTOR = ".game, .schedule_game, li.game"
-DATE_SELECTOR = ".date, .game_date"
-TEAM_SELECTOR = ".team_name, .name"
-SCORE_SELECTOR = ".score, .team_score"
-STATUS_SELECTOR = ".state, .status"
-VENUE_SELECTOR = ".place, .venue"
+GAME_CARD_SELECTOR = ".game"
+TEAM_SELECTOR = ".team"
+SCORE_SELECTOR = ".num"
+VENUE_SELECTOR = ".place"
+
+# 目前只實際看過 "final"（已完賽）這個狀態值；其他狀態（例如未開賽、延賽）
+# 還沒有實際範例可以對照，遇到未知的 class 就直接顯示原始文字，而不是猜。
+STATUS_CLASS_LABELS = {
+    "final": "已完賽",
+}
+
+_DATE_HEADER_RE = re.compile(r"date|day", re.IGNORECASE)
 
 
 def _diagnostic_html_snippet(soup: BeautifulSoup, *, limit: int = 4000) -> str:
@@ -37,8 +71,6 @@ def _diagnostic_html_snippet(soup: BeautifulSoup, *, limit: int = 4000) -> str:
     比對出目前正確的 class 名稱該怎麼寫，不用再往返一次「你重跑一次工作流程、
     我再看 log」。
     """
-    import re
-
     candidate = soup.find(
         attrs={"class": re.compile(r"schedule|game|box", re.IGNORECASE)}
     ) or soup.find(attrs={"id": re.compile(r"schedule|game|box", re.IGNORECASE)})
@@ -47,6 +79,29 @@ def _diagnostic_html_snippet(soup: BeautifulSoup, *, limit: int = 4000) -> str:
     if len(raw) > limit:
         return raw[:limit] + f"...(截斷，完整長度 {len(raw)} 字元)"
     return raw
+
+
+def _find_game_date(card: Tag) -> str:
+    """嘗試從卡片以外的地方（往前找最近一個像日期標題的元素）取得比賽日期。
+
+    這是「盡量找、找不到也沒關係」的最佳猜測：目前還沒確認官網真正的日期
+    標題結構，找不到就回傳空字串，不會讓整場比賽的其他資料（球隊、比分）
+    也一起解析失敗。
+    """
+    date_like = card.find_previous(attrs={"class": _DATE_HEADER_RE})
+    if date_like is not None:
+        text = date_like.get_text(strip=True)
+        if text:
+            return text
+    return ""
+
+
+def _status_from_classes(card: Tag) -> str:
+    classes = card.get("class") or []
+    other_classes = [c for c in classes if c != "game"]
+    if not other_classes:
+        return ""
+    return STATUS_CLASS_LABELS.get(other_classes[0], other_classes[0])
 
 
 @dataclass
@@ -80,10 +135,8 @@ def fetch_schedule(*, html: str | None = None) -> list[GameResult]:
 
     games: list[GameResult] = []
     for card in cards:
-        date_el = card.select_one(DATE_SELECTOR)
         team_els = card.select(TEAM_SELECTOR)
         score_els = card.select(SCORE_SELECTOR)
-        status_el = card.select_one(STATUS_SELECTOR)
         venue_el = card.select_one(VENUE_SELECTOR)
 
         if len(team_els) < 2:
@@ -95,12 +148,12 @@ def fetch_schedule(*, html: str | None = None) -> list[GameResult]:
 
         games.append(
             GameResult(
-                date=date_el.get_text(strip=True) if date_el else "",
+                date=_find_game_date(card),
                 away_team=team_els[0].get_text(strip=True),
                 home_team=team_els[1].get_text(strip=True),
                 away_score=away_score,
                 home_score=home_score,
-                status=status_el.get_text(strip=True) if status_el else "",
+                status=_status_from_classes(card),
                 venue=venue_el.get_text(strip=True) if venue_el else None,
             )
         )

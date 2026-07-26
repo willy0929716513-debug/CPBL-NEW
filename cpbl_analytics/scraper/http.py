@@ -205,13 +205,25 @@ def get_rendered_html_after_selecting(
 
 
 def _try_select_option(page, option_text: str) -> bool:
-    """找頁面上是不是有 <select> 選單裡有一個選項文字等於 option_text，有的話選取它。"""
+    """找頁面上是不是有 <select> 選單裡有一個選項文字符合 option_text，有的話選取它。
+
+    先找「完全相等」的選項，找不到才退而求其次找「選項文字包含 option_text」
+    的——官網下拉選單的實際文字不一定就是我們要找的那個詞本身，例如
+    「投手」這個概念，選單裡實際顯示的是「投手成績」。
+    """
     selects = page.locator("select")
     for i in range(selects.count()):
         sel = selects.nth(i)
         option_texts = [t.strip() for t in sel.locator("option").all_inner_texts()]
         if option_text in option_texts:
             sel.select_option(label=option_text)
+            return True
+    for i in range(selects.count()):
+        sel = selects.nth(i)
+        option_texts = [t.strip() for t in sel.locator("option").all_inner_texts()]
+        match = next((t for t in option_texts if option_text in t), None)
+        if match is not None:
+            sel.select_option(label=match)
             return True
     return False
 
