@@ -349,14 +349,20 @@ def _try_click_by_text(page, option_text: str, *, exact: bool) -> bool:
 
 
 def _try_click_button_by_text(page, texts: list[str]) -> bool:
-    """在真正的 <button> 元素裡找文字包含 texts 其中之一的，找到就點下去。
+    """用「按鈕」這個無障礙角色（role=button）去找文字符合 texts 其中之一的
+    元素，找到就點下去。
 
-    比起「頁面上任何文字等於 XXX 的元素」，限定在 <button> 標籤裡找更精準
-    ——像麵包屑導覽「全記錄查詢」這種連結，文字上會誤中「查詢」兩個字，
-    但語意上根本不是一個表單送出按鈕。
+    這裡故意不用 `page.locator("button", has_text=...)`：CPBL 官網這個查詢
+    按鈕實際上是 `<input type="button" value="查詢" onclick="...">`，
+    不是 `<button>` 標籤——`<input>` 元素的可見文字來自 value 屬性，不是
+    子節點文字，`locator("button", ...)` 跟純文字比對的 get_by_text() 都
+    抓不到它（get_by_text 之前就意外抓到一個無關的麵包屑連結，正是因為
+    真正的按鈕它完全找不到）。`get_by_role("button", name=...)` 才是
+    Playwright 官方建議、真正涵蓋 <button>／<input type="button">／
+    <input type="submit"> 這幾種「語意上是按鈕」元素的寫法。
     """
     for text in texts:
-        locator = page.locator("button", has_text=text).first
+        locator = page.get_by_role("button", name=text).first
         if locator.count() == 0:
             continue
         try:
