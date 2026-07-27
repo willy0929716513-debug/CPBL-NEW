@@ -290,3 +290,31 @@ def test_diagnostic_body_snippet_strips_head_boilerplate_and_keeps_body():
     assert "一堆開發註解" not in snippet
     assert "<select>" in snippet
     assert "投手成績" in snippet
+
+
+def test_diagnostic_body_snippet_skips_nav_and_finds_main_content():
+    # 這是修這支程式的第二次原因：光拿掉 <head> 還不夠，官網 <body> 最前面
+    # 整套導覽選單（手機版選單、主選單、球隊 logo 列）本身就有好幾千字元，
+    # 一樣會把截斷長度吃光，看不到 #Content 裡真正的表單/表格內容。
+    nav_filler = "<li><a href='/x'>雜訊連結</a></li>" * 200
+    html = f"""
+    <html><body>
+    <div class="mm-menu" id="MenuMobile"><ul>{nav_filler}</ul></div>
+    <div class="mm-page" id="Wrap">
+      <header id="Header">
+        <nav id="Menu"><ul>{nav_filler}</ul></nav>
+      </header>
+      <div id="Center">
+        <div id="Content">
+          <select><option>打者成績</option><option>投手成績</option></select>
+          <table><tr><th>打擊率</th></tr></table>
+        </div>
+      </div>
+    </div>
+    </body></html>
+    """
+    snippet = _diagnostic_body_snippet(html, limit=6000)
+
+    assert "雜訊連結" not in snippet
+    assert "<select>" in snippet
+    assert "投手成績" in snippet
