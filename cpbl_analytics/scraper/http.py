@@ -207,12 +207,15 @@ def _truncate(text: str, *, limit: int = 4000) -> str:
 
 
 def _diagnostic_body_snippet(html: str, *, limit: int = 6000) -> str:
-    """把整頁 HTML 裡的 <head>／<script>／<style>／註解拿掉，只留 <body> 內容再截斷。
+    """把整頁 HTML 裡的 <head>／<script>／<style>／註解／導覽選單拿掉，
+    盡量只留下「主要內容區塊」再截斷。
 
-    像 CPBL 官網這種傳統 ASP.NET + 一堆 CSS/JS 掛件（Google Tag Manager、
-    選單套件...）的頁面，光 <head> 就可能好幾千字元，如果直接對整份原始
-    HTML 做字元截斷，錯誤訊息裡塞的全是追蹤碼、樣式表連結，實際需要看的
-    表單／下拉選單／表格內容反而被擠到截斷範圍外面，完全看不到。
+    像 CPBL 官網這種傳統 ASP.NET 頁面，光 <head>（追蹤碼、樣式表）跟
+    <body> 最前面的整套導覽選單（手機版選單、主選單、球隊 logo 列）就可能
+    好幾千字元，如果只拿掉 <head> 還是不夠——截斷長度全部會被導覽選單
+    吃光，永遠看不到 <body> 後段真正的表單／下拉選單／表格內容。
+    這裡先試著抓常見的「主要內容區塊」容器（id="Content"／id="Center"／
+    <main>／role="main"），找不到才退回整個 <body>。
     """
     from bs4 import BeautifulSoup, Comment
 
@@ -221,8 +224,21 @@ def _diagnostic_body_snippet(html: str, *, limit: int = 6000) -> str:
         tag.decompose()
     for comment in soup.find_all(string=lambda s: isinstance(s, Comment)):
         comment.extract()
-    body = soup.find("body")
-    raw = str(body) if body is not None else str(soup)
+    # 導覽選單／頁首本身也是雜訊來源，主要內容抓到後直接把它們拿掉，
+    # 這樣就算最後還是退回整個 <body>，至少不會被選單佔滿截斷長度。
+    for tag in soup.find_all(["nav", "header"]):
+        tag.decompose()
+    for tag in soup.find_all(id=lambda v: v in ("MenuMobile", "Header", "Menu")):
+        tag.decompose()
+
+    main_content = (
+        soup.find(id="Content")
+        or soup.find(id="Center")
+        or soup.find("main")
+        or soup.find(attrs={"role": "main"})
+        or soup.find("body")
+    )
+    raw = str(main_content) if main_content is not None else str(soup)
     return _truncate(raw, limit=limit)
 
 
