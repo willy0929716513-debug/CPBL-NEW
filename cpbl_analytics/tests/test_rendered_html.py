@@ -160,10 +160,13 @@ def test_try_click_by_text_returns_false_instead_of_raising_when_click_fails():
 
 
 def test_try_click_button_by_text_prefers_real_button_over_unrelated_text():
+    # CPBL 官網真正的查詢按鈕是 <input type="button" value="查詢">，不是
+    # <button> 標籤，所以要用 get_by_role("button", ...)（涵蓋 <input
+    # type="button"／submit>），不能用 locator("button", ...) 或純文字比對。
     page = Mock()
     button = Mock()
     button.count.return_value = 1
-    page.locator.return_value.first = button
+    page.get_by_role.return_value.first = button
 
     assert _try_click_button_by_text(page, ["查詢", "搜尋"]) is True
     button.click.assert_called_once()
@@ -175,14 +178,13 @@ def test_try_click_button_by_text_tries_next_text_when_no_button_matches_first()
     no_button.count.return_value = 0
     yes_button = Mock()
     yes_button.count.return_value = 1
-    page.locator.return_value.first = no_button
 
-    def locator_side_effect(_tag, has_text=None):
+    def get_by_role_side_effect(_role, name=None):
         loc = Mock()
-        loc.first = yes_button if has_text == "搜尋" else no_button
+        loc.first = yes_button if name == "搜尋" else no_button
         return loc
 
-    page.locator.side_effect = locator_side_effect
+    page.get_by_role.side_effect = get_by_role_side_effect
 
     assert _try_click_button_by_text(page, ["查詢", "搜尋"]) is True
     yes_button.click.assert_called_once()
@@ -192,7 +194,7 @@ def test_try_click_button_by_text_returns_false_when_nothing_matches():
     page = Mock()
     no_button = Mock()
     no_button.count.return_value = 0
-    page.locator.return_value.first = no_button
+    page.get_by_role.return_value.first = no_button
 
     assert _try_click_button_by_text(page, ["查詢", "搜尋", "送出"]) is False
 
@@ -200,23 +202,20 @@ def test_try_click_button_by_text_returns_false_when_nothing_matches():
 def _page_with_selectable_option(option_texts: list[str]) -> Mock:
     """回傳一個 page mock，其 <select> 選單能被 _try_select_option 選中。
 
-    page.locator() 這次要依「選的是 select 還是 button」回傳不同的假物件
-    ——不然 _try_click_button_by_text() 也呼叫 page.locator("button", ...)，
-    如果跟 select 共用同一個 return_value，找按鈕那步會被誤判成「有找到」。
+    select 查詢走 page.locator("select")，按鈕查詢走 page.get_by_role("button", ...)
+    ——兩條路徑用不同的 mock 方法，本來就不會互相干擾，這裡把「找不到按鈕」
+    設成預設值，讓測試專注在 select 這條路徑上。
     """
     page = Mock()
     select = _fake_select(option_texts)
     selects = Mock()
     selects.count.return_value = 1
     selects.nth.return_value = select
+    page.locator.return_value = selects
 
-    no_button_locator = Mock()
-    no_button_locator.first.count.return_value = 0
-
-    def locator_side_effect(tag, **kwargs):
-        return selects if tag == "select" else no_button_locator
-
-    page.locator.side_effect = locator_side_effect
+    no_button = Mock()
+    no_button.count.return_value = 0
+    page.get_by_role.return_value.first = no_button
     return page
 
 
