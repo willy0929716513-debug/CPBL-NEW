@@ -46,6 +46,14 @@ def cmd_scrape(args: argparse.Namespace) -> int:
     storage.init_db()
     exit_code = 0
     reports: dict[str, ValidationReport] = {}
+    # 這幾個變數保留「這次執行實際抓到的原始資料」，給最後匯出
+    # predictions.json／power_ratings.json 用（見下面 export_predictions()）。
+    # 初始化成空 list，這樣某個資料集這一輪剛好抓取失敗時，後面的預測匯出
+    # 步驟頂多算出比較不完整的結果，而不會直接整個報錯中斷。
+    standings: list = []
+    batting: list = []
+    pitching: list = []
+    games: list = []
 
     try:
         print("正在抓取球隊戰績...")
@@ -111,6 +119,18 @@ def cmd_scrape(args: argparse.Namespace) -> int:
         latest_export.export_validation_summary(reports)
         latest_export.export_last_updated(year=args.year)
         print(f"\n已匯出最新快照到 {latest_export.LATEST_DIR}（會被 GitHub Actions commit 回 repo）")
+
+    # 算球隊實力評分／近期賽程勝率預測，給 Next.js 網站（web/）用。這是
+    # 額外的加值輸出，不是核心資料正確性的一部分，所以刻意包一層 try/except：
+    # 就算這裡算出問題，也不該讓已經抓好、驗證通過的 standings/batting/
+    # pitching/schedule 資料無法 commit 回 repo。
+    try:
+        latest_export.export_predictions(
+            standings=standings, batting=batting, pitching=pitching, schedule=games
+        )
+        print("已匯出球隊實力評分／賽程勝率預測（power_ratings.json／predictions.json）")
+    except Exception as exc:  # noqa: BLE001 - 這裡出錯不該擋住其他資料集的 commit
+        print(f"⚠️ 匯出勝率預測時發生錯誤（不影響其他資料集）：{exc}")
 
     return exit_code
 
