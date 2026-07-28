@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-28T06:25:45.768250+00:00",
+  "generated_at": "2026-07-28T06:53:18.548812+00:00",
   "datasets": {
     "standings": {
       "all_passed": true,
@@ -80,6 +80,41 @@
           "name": "OPS = OBP + SLG 交叉驗證",
           "passed": true,
           "severity": "warning",
+          "message": "通過",
+          "offending_items": []
+        }
+      ]
+    },
+    "pitching": {
+      "all_passed": true,
+      "error_count": 0,
+      "warning_count": 0,
+      "checks": [
+        {
+          "name": "投手重複列檢查",
+          "passed": true,
+          "severity": "error",
+          "message": "沒有重複的球員列",
+          "offending_items": []
+        },
+        {
+          "name": "防禦率 ERA 交叉驗證",
+          "passed": true,
+          "severity": "error",
+          "message": "通過",
+          "offending_items": []
+        },
+        {
+          "name": "WHIP 交叉驗證",
+          "passed": true,
+          "severity": "warning",
+          "message": "通過",
+          "offending_items": []
+        },
+        {
+          "name": "投手基礎欄位邏輯一致性（自責分 <= 失分）",
+          "passed": true,
+          "severity": "error",
           "message": "通過",
           "offending_items": []
         }
