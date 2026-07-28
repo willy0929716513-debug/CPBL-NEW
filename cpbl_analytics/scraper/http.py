@@ -161,6 +161,7 @@ def get_rendered_html_after_selecting(
     *,
     option_text: str,
     verify_text_absent: str | None = None,
+    verify_text_present: str | None = None,
     timeout_ms: int = 20000,
 ) -> str:
     """載入網頁後，切換到某個分頁／篩選選項，再回傳切換後的渲染結果。
@@ -175,16 +176,24 @@ def get_rendered_html_after_selecting(
     Args:
         option_text: 要切換過去的分頁/選項文字，例如「投手成績」。
         verify_text_absent: 選填。切換「前」畫面上會有、切換「成功後」應該
-            消失的文字（例如打者表特有的表頭「打擊率」）。有些頁面選完
-            下拉選單選項後，還需要另外按「查詢」/「搜尋」按鈕才會真的重新
-            查詢，光呼叫 select_option() 不會觸發——提供這個參數，才能在
-            切換看起來「有做但沒有真的生效」時，自動再多試一步按查詢按鈕，
-            而不是安靜地把切換前的舊內容當成新內容回傳。
+            消失的文字。**注意**：用「不應該再出現的字」當驗證條件，前提是
+            那段文字保證不會以任何形式出現在切換後的畫面裡——實際踩到的
+            地雷是拿「打擊率」驗證投手分頁有沒有切換成功，結果投手表格
+            自己也有一欄「被打擊率」（被打擊率＝對手打擊率），整個字串
+            剛好包含「打擊率」，導致這個檢查永遠判定「還沒切換成功」，
+            即使切換其實已經生效。這種「新畫面可能仍包含舊字串的子字串」
+            的情況下，請改用下面的 verify_text_present。
+        verify_text_present: 選填。切換「成功後」畫面上一定會出現、且不會
+            出現在切換「前」畫面的文字（例如投手表特有、打者表不會出現的
+            表頭「防禦率」）。比 verify_text_absent 更可靠——不用擔心新畫面
+            剛好包含舊字串的子字串，只需要確認新畫面「確實有」新內容的
+            專屬標記。verify_text_absent 和 verify_text_present 可以同時
+            提供，兩者都會被檢查。
+        timeout_ms: 逾時時間（毫秒）。
 
     Raises:
         FetchError: 瀏覽器啟動失敗、頁面載入逾時、完全找不到符合的切換元素、
-            或（提供 verify_text_absent 時）切換後畫面內容看起來仍是切換前
-            的樣子。
+            或切換後畫面內容看起來仍是切換前的樣子。
     """
 
     def _run(page):
@@ -194,6 +203,7 @@ def get_rendered_html_after_selecting(
             url=url,
             option_text=option_text,
             verify_text_absent=verify_text_absent,
+            verify_text_present=verify_text_present,
             timeout_ms=timeout_ms,
         )
 
@@ -242,12 +252,30 @@ def _diagnostic_body_snippet(html: str, *, limit: int = 6000) -> str:
     return _truncate(raw, limit=limit)
 
 
+def _is_stale(content: str, *, verify_text_absent: str | None, verify_text_present: str | None) -> bool:
+    """判斷目前畫面內容看起來是不是「切換前」的舊內容。
+
+    verify_text_absent 用「子字串是否還在」判斷，有個地雷：新畫面不一定
+    真的完全不含這段文字的子字串（例如拿「打擊率」驗證投手分頁有沒有切換
+    成功，結果投手表格自己也有一欄「被打擊率」，字串裡剛好包含「打擊率」，
+    導致這個條件永遠成立、永遠判定成「還沒切換成功」，即使切換其實已經
+    生效）。verify_text_present 檢查「新畫面專屬的字」有沒有出現，兩種
+    條件都可以提供，任一個判斷「還是舊畫面」就視為 stale。
+    """
+    if verify_text_absent is not None and verify_text_absent in content:
+        return True
+    if verify_text_present is not None and verify_text_present not in content:
+        return True
+    return False
+
+
 def _select_and_verify(
     page,
     *,
     url: str,
     option_text: str,
     verify_text_absent: str | None,
+    verify_text_present: str | None = None,
     timeout_ms: int,
 ) -> str:
     """實際執行「切換分頁/選項 -> 視需要再多按查詢按鈕 -> 回傳結果」的邏輯。
@@ -271,7 +299,7 @@ def _select_and_verify(
     page.wait_for_load_state("networkidle", timeout=timeout_ms)
     content = page.content()
 
-    if verify_text_absent is not None and verify_text_absent in content:
+    if _is_stale(content, verify_text_absent=verify_text_absent, verify_text_present=verify_text_present):
         # 切換動作執行了，但畫面看起來還是切換前的樣子——常見原因是
         # 這種查詢頁面選完選項後還需要手動按「查詢/搜尋」才會真的送出，
         # 這裡多嘗試一步，而不是直接把舊內容當新內容回傳。
@@ -290,27 +318,45 @@ def _select_and_verify(
             page.wait_for_load_state("networkidle", timeout=timeout_ms)
         except Exception:  # noqa: BLE001 - 逾時也沒關係，交給下面的主動輪詢
             pass
-        # 主動輪詢畫面內容，直到 verify_text_absent 真的消失、或逾時——
-        # 不是「networkidle 一結束就檢查一次」。有些頁面的查詢是先顯示
-        # loading 動畫、AJAX 回來後才整段換掉表格內容，這個時間點不一定
-        # 剛好卡在 networkidle 判定的瞬間，需要的話多等一下，而不是太早
-        # 就把還沒更新的畫面當成最終結果。
+        # 主動輪詢畫面內容，直到判斷式不再視為 stale、或逾時——不是
+        # 「networkidle 一結束就檢查一次」。有些頁面的查詢是先顯示 loading
+        # 動畫、AJAX 回來後才整段換掉表格內容，這個時間點不一定剛好卡在
+        # networkidle 判定的瞬間，需要的話多等一下，而不是太早就把還沒
+        # 更新的畫面當成最終結果。
+        #
+        # 用 verify_text_present（若有提供）當輪詢條件優先——它檢查的是
+        # 「新內容出現了沒」，比 verify_text_absent 的「舊內容消失了沒」
+        # 更準確（新畫面的某段文字仍包含舊字串的子字串是常見情況，見
+        # _is_stale 的說明）。
         try:
-            page.wait_for_function(
-                "text => !document.body.innerText.includes(text)",
-                arg=verify_text_absent,
-                timeout=timeout_ms,
-            )
+            if verify_text_present is not None:
+                page.wait_for_function(
+                    "text => document.body.innerText.includes(text)",
+                    arg=verify_text_present,
+                    timeout=timeout_ms,
+                )
+            elif verify_text_absent is not None:
+                page.wait_for_function(
+                    "text => !document.body.innerText.includes(text)",
+                    arg=verify_text_absent,
+                    timeout=timeout_ms,
+                )
         except Exception:  # noqa: BLE001 - 逾時就用目前拿到的內容走正常的錯誤判斷流程
             pass
         content = page.content()
 
-        if verify_text_absent in content:
+        if _is_stale(content, verify_text_absent=verify_text_absent, verify_text_present=verify_text_present):
+            reason_parts = []
+            if verify_text_absent is not None and verify_text_absent in content:
+                reason_parts.append(f"仍然包含「{verify_text_absent}」")
+            if verify_text_present is not None and verify_text_present not in content:
+                reason_parts.append(f"仍然沒有出現「{verify_text_present}」")
+            reason = "、".join(reason_parts)
             raise FetchError(
                 f"已嘗試切換到「{option_text}」（也試過點擊查詢/搜尋按鈕），"
-                f"但畫面內容看起來仍然是切換前的樣子（仍然包含"
-                f"「{verify_text_absent}」）。可能這個下拉選單不是實際控制"
-                "這份資料的開關，或是還需要別的步驟才會真的重新查詢。\n"
+                f"但畫面內容看起來仍然是切換前的樣子（{reason}）。可能這個"
+                "下拉選單不是實際控制這份資料的開關，或是還需要別的步驟才會"
+                "真的重新查詢。\n"
                 f"頁面渲染後的 HTML（截斷）：\n{_diagnostic_body_snippet(content)}"
             )
 
