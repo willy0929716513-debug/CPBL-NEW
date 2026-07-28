@@ -41,9 +41,17 @@ jobs:
         run: playwright install --with-deps chromium
 
       - name: 執行爬蟲與資料驗證
+        id: scrape
+        # 四個資料集是各自獨立爬的（見 cli.py），只要有一個失敗整個指令就會
+        # 回傳非 0——如果不加這個，GitHub Actions 預設會直接跳過下一步
+        # 「提交更新後的資料快照」，導致其他三個明明有成功、已經匯出好的
+        # 資料集也一起被卡住、永遠沒有 commit 回 repo。加了這個之後，改成
+        # 下面的步驟自己判斷要不要 commit、以及要不要讓這次執行整體標記失敗。
+        continue-on-error: true
         run: python -m cpbl_analytics.cli scrape
 
       - name: 提交更新後的資料快照
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -54,3 +62,10 @@ jobs:
             git commit -m "自動更新 CPBL 資料快照 $(date -u +%Y-%m-%dT%H:%M:%SZ)"
             git push
           fi
+
+      - name: 若有資料集抓取失敗，把這次執行標記為失敗（但上面已經先把成功的部分存好了）
+        if: steps.scrape.outcome == 'failure'
+        run: |
+          echo "至少有一個資料集抓取/驗證失敗，詳見上面「執行爬蟲與資料驗證」步驟的輸出。"
+          echo "有成功的資料集已經照常 commit 回 repo，不會被這個失敗卡住。"
+          exit 1
