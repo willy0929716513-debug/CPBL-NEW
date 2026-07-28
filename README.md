@@ -2,7 +2,14 @@
 
 一個以「職業分析師」角度打造的中華職棒（CPBL）數據分析工具：從官網爬取球隊戰績、
 打者/投手數據、賽程戰報，做**交叉驗證**確保數字正確，計算進階數據指標（wOBA 近似值、
-FIP 近似值、畢氏勝率期望值...），並提供 Streamlit 網頁版儀表板瀏覽。
+FIP 近似值、畢氏勝率期望值...）、用 log5 公式算出比賽勝率預測，並提供兩套網頁版介面
+瀏覽（見下方「網頁版」章節）：
+
+- **`web/`（Next.js，Apple Sports / ESPN / Sofascore 風格，逐步取代下面這套）**：
+  正式對外的網站，Premium／Dark Mode／Glassmorphism 質感，部署在 Vercel。
+- **`cpbl_analytics/app/`（Streamlit，過渡期保留）**：功能較完整（打者/投手排行榜、
+  球隊比較雷達圖、完整資料驗證報表），在 Next.js 版補齊這些頁面之前先繼續保留、
+  繼續能用，之後會完全淘汰。
 
 ## ⚠️ 重要：關於資料正確性與目前環境限制
 
@@ -115,7 +122,59 @@ Streamlit Cloud 會自動偵測到並重新整理**，網頁上的資料就會�
 - 想知道最新一次資料到底有沒有通過驗證：網頁版左側「資料驗證」分頁，
   或直接在 GitHub 上打開 `data/latest/validation_summary.json` 這個檔案看。
 
-## 本機開發 / 除錯用（進階）
+## 🎨 新版網站（Next.js，部署到 Vercel）
+
+`web/` 目錄是全新設計的正式對外網站，走 Apple Sports／ESPN／Sofascore／
+TradingView 那種 Premium、Dark Mode、Glassmorphism 質感，**刻意不做成一般
+運彩網站的花俏霓虹風格**。目前做好的頁面：首頁（今日 AI 精選推薦＋近期賽程）、
+賽程、AI 預測（勝率 Progress Ring＋可自行輸入賠率比對）、排行榜、更多
+（資料來源／免責聲明）。球隊頁、球員頁、AI 分析文章、我的收藏這幾頁還沒做，
+先用 Streamlit 版頂著。
+
+### 資料從哪裡來
+
+跟 Streamlit 版共用同一份 `data/latest/`，不會兩邊資料對不上：
+
+```
+GitHub Actions（跟 Streamlit 版用同一個排程）
+   └─ cli scrape → 匯出 data/latest/*.csv、predictions.json、power_ratings.json
+        └─ commit 回這個 repo
+             └─ Vercel 偵測到 repo 有新的 commit，重新建置
+                  └─ web/scripts/copy-data.mjs 先把 data/latest/ 複製進 web/data/latest/
+                       └─ Next.js 用複製過來的這份資料產生新的靜態頁面
+```
+
+`predictions.json`／`power_ratings.json` 是 `cpbl_analytics/predictions.py`
+（log5 公式＋貝氏小樣本收斂）算好才輸出的——勝率預測的邏輯永遠只有 Python
+這一份，Next.js 只負責呈現，不會重新用 TypeScript 兜一次公式、兩邊對不上。
+
+### 部署步驟（只需要做一次）
+
+1. 開 https://vercel.com，用你的 GitHub 帳號登入
+2. 「Add New...」→「Project」→ Import 這個 repo
+3. **Root Directory 設定成 `web`**（這是最容易漏掉的一步——這個 repo 是
+   monorepo，Python 爬蟲跟 Next.js 網站放在同一個 repo，不設定的話 Vercel
+   會在 repo 根目錄找 `package.json`，找不到就會部署失敗）
+4. Framework Preset 選 Next.js（設好 Root Directory 後通常會自動偵測到）
+5. 按 Deploy，等一兩分鐘會拿到一個 `xxx.vercel.app` 網址
+
+部署好之後，跟 Streamlit Cloud 一樣，**每次 GitHub Actions 排程跑完、
+commit 新資料回 repo，Vercel 會自動偵測到並重新建置**，不需要手動重新部署。
+
+### 本機開發
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+`npm run dev`／`npm run build` 之前都會先自動跑 `scripts/copy-data.mjs`
+把 repo 根目錄的 `data/latest/` 複製一份進來，本機沒有這份資料的話，先在
+repo 根目錄跑一次 `python -m cpbl_analytics.cli scrape`（需要能連外網），
+或直接 `git pull` 拉最新版（`data/latest/` 本身有進版控）。
+
+## 本機開發 / 除錯用（Streamlit 過渡版，進階）
 
 如果你想在自己電腦上跑（例如要修改 `schedule.py` 裡的 CSS selector、
 或想在本機先測試），流程如下：
@@ -167,7 +226,8 @@ cpbl_analytics/
 │   ├── batting.py           # 打者「全記錄查詢」scraper
 │   ├── pitching.py          # 投手「全記錄查詢」scraper（含 12.1 局數記號正確轉換）
 │   └── schedule.py          # 賽程與戰報 scraper
-├── app/
+├── predictions.py           # 比賽勝率預測：球隊實力評分 + log5 公式 + 小樣本收斂
+├── app/                     # Streamlit 過渡版（見上面「新版網站」章節，逐步淘汰中）
 │   ├── Home.py               # Streamlit 入口頁
 │   ├── utils.py              # 網頁版共用工具：資料載入（CSV 優先、sqlite 備援）、配色
 │   └── pages/                # Streamlit 多頁面（左側導覽列自動產生）
@@ -175,7 +235,22 @@ cpbl_analytics/
     ├── fixtures/              # 離線測試用的模擬官網 HTML
     ├── test_scraper_parsing.py
     ├── test_validation.py
-    └── test_sabermetrics.py
+    ├── test_sabermetrics.py
+    ├── test_predictions.py
+    └── test_latest_export.py
+
+web/                          # 新版網站（Next.js，部署到 Vercel，見上面「新版網站」章節）
+├── app/
+│   ├── page.tsx               # 首頁
+│   ├── predictions/page.tsx   # AI 預測
+│   ├── rankings/page.tsx      # 排行榜
+│   ├── schedule/page.tsx      # 賽程
+│   └── more/page.tsx          # 更多（資料來源／免責聲明）
+├── components/                # GlassCard／ProgressRing／TeamBadge／BottomNav 等共用元件
+├── lib/
+│   ├── data.ts                 # 讀取 web/data/latest/ 的 CSV／JSON
+│   └── teams.ts                # 球隊色票／徽章文字（跟 Python 那邊用同一組色票）
+└── scripts/copy-data.mjs       # build/dev 前把 repo 根目錄 data/latest/ 複製進來
 ```
 
 ## 資料怎麼存、怎麼讀（兩層設計）
@@ -229,19 +304,22 @@ docstring 裡，這裡只列重點：
 
 ```
 pytest cpbl_analytics/tests -v
-# 69 passed
+# 71 passed
 ```
 
 涵蓋：表頭比對解析（含官網改版模擬情境會正確拋出錯誤）、colspan 造成表頭/
 資料列儲存格數量不一致時會直接擋下來（而不是錯位賦值）、投手局數記號
 （`12.1` = 12又1/3局）正確轉換、打擊率/上壘率/長打率/OPS/防禦率/WHIP 交叉驗證、
-www / 非 www 網址自動切換邏輯、以及故意塞入矛盾數據（如安打數超過打數）
-確認驗證機制真的抓得到問題。
+www / 非 www 網址自動切換邏輯、log5 勝率預測與小樣本收斂、以及故意塞入矛盾
+數據（如安打數超過打數）確認驗證機制真的抓得到問題。
 
 Streamlit 網頁版亦已用 `streamlit.testing.v1.AppTest` 對全部 8 個頁面做過
 無例外執行測試（包含模擬「全新雲端部署、完全沒有本機 sqlite、只有
 `data/latest/` CSV」的情境），並用瀏覽器截圖確認實際版面（表格、圖表、
-篩選器、雷達圖）正常渲染。
+篩選器、雷達圖）正常渲染。Next.js 新版網站則用 `npm run build` 確認 TypeScript
+型別檢查與靜態頁面產生都沒有問題，並用瀏覽器截圖（含 iPhone 尺寸的 mobile
+viewport）確認首頁／賽程／AI 預測／排行榜／更多這幾頁的實際版面與互動
+（例如 AI 預測頁「輸入賠率比對」的即時計算）都正常運作。
 
 ## 常見問題
 

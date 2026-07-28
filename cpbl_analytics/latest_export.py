@@ -94,6 +94,55 @@ def load_validation_summary() -> dict | None:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def export_predictions(
+    *,
+    standings: list[Any],
+    batting: list[Any],
+    pitching: list[Any],
+    schedule: list[Any],
+) -> Path:
+    """算出球隊實力評分與近期賽程勝率預測，匯出成 JSON 給 Next.js 網站用。
+
+    刻意在這裡算好、直接輸出成 JSON，而不是讓前端（TypeScript）自己重新
+    實作一次 log5 公式／貝氏小樣本收斂——這樣預測邏輯永遠只有 Python 這
+    一份（cpbl_analytics/predictions.py），前端只負責呈現，不會出現「兩邊
+    算出來的數字對不上」的風險。
+
+    任何一個資料集是空的（例如那一輪爬蟲剛好失敗）都不會讓這裡整個炸掉，
+    頂多算出比較不完整的結果（例如沒有打者/投手數據時，power_rating 只能
+    用球季勝率），這樣才符合 cli.py 既有的「部分資料集失敗不擋住其他部分」
+    設計。
+    """
+    from cpbl_analytics.predictions import compute_team_power_ratings, predict_upcoming_games
+
+    standings_df = pd.DataFrame([asdict(r) for r in standings]) if standings else pd.DataFrame()
+    batting_df = pd.DataFrame([asdict(r) for r in batting]) if batting else pd.DataFrame()
+    pitching_df = pd.DataFrame([asdict(r) for r in pitching]) if pitching else pd.DataFrame()
+    schedule_df = pd.DataFrame([asdict(r) for r in schedule]) if schedule else pd.DataFrame()
+    if not schedule_df.empty and "date" in schedule_df.columns:
+        # 跟 export_dataset_csv 的 schedule 分支一樣，統一欄位名稱。
+        schedule_df = schedule_df.rename(columns={"date": "game_date"})
+
+    power_ratings = compute_team_power_ratings(standings_df, batting_df, pitching_df)
+    upcoming = (
+        predict_upcoming_games(schedule_df, power_ratings)
+        if not schedule_df.empty and not power_ratings.empty
+        else pd.DataFrame()
+    )
+
+    power_ratings_path = LATEST_DIR / "power_ratings.json"
+    power_ratings_path.write_text(
+        power_ratings.to_json(orient="records", force_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    predictions_path = LATEST_DIR / "predictions.json"
+    predictions_path.write_text(
+        upcoming.to_json(orient="records", force_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    return predictions_path
+
+
 def export_last_updated(*, year: int | None = None) -> Path:
     path = LATEST_DIR / "last_updated.json"
     path.write_text(
