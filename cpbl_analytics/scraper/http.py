@@ -286,7 +286,23 @@ def _select_and_verify(
             or _try_click_by_text(page, "搜尋", exact=False)
             or _try_click_by_text(page, "送出", exact=False)
         )
-        page.wait_for_load_state("networkidle", timeout=timeout_ms)
+        try:
+            page.wait_for_load_state("networkidle", timeout=timeout_ms)
+        except Exception:  # noqa: BLE001 - 逾時也沒關係，交給下面的主動輪詢
+            pass
+        # 主動輪詢畫面內容，直到 verify_text_absent 真的消失、或逾時——
+        # 不是「networkidle 一結束就檢查一次」。有些頁面的查詢是先顯示
+        # loading 動畫、AJAX 回來後才整段換掉表格內容，這個時間點不一定
+        # 剛好卡在 networkidle 判定的瞬間，需要的話多等一下，而不是太早
+        # 就把還沒更新的畫面當成最終結果。
+        try:
+            page.wait_for_function(
+                "text => !document.body.innerText.includes(text)",
+                arg=verify_text_absent,
+                timeout=timeout_ms,
+            )
+        except Exception:  # noqa: BLE001 - 逾時就用目前拿到的內容走正常的錯誤判斷流程
+            pass
         content = page.content()
 
         if verify_text_absent in content:
