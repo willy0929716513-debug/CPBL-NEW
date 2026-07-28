@@ -265,6 +265,56 @@ def test_select_and_verify_raises_when_stale_content_never_changes():
         )
 
 
+def test_select_and_verify_accepts_new_content_via_verify_text_present():
+    # 這是實際在 GitHub Actions 上踩到的地雷：投手表格自己也有一欄
+    # 「被打擊率」，字串裡剛好包含「打擊率」，用 verify_text_absent="打擊率"
+    # 判斷「舊內容是否消失」永遠會判定失敗，即使切換其實已經成功。改用
+    # verify_text_present 檢查「新內容的專屬標記」（例如投手表才有的
+    # 「防禦率」）就不會有這個問題。
+    page = _page_with_selectable_option(["打者成績", "投手成績"])
+    page.content.return_value = "<html>防禦率...被打擊率...(新內容，但仍含「打擊率」子字串)</html>"
+
+    result = _select_and_verify(
+        page, url="https://example.com", option_text="投手成績",
+        verify_text_absent=None, verify_text_present="防禦率", timeout_ms=1000,
+    )
+
+    assert "防禦率" in result
+
+
+def test_select_and_verify_clicks_query_button_when_expected_marker_missing():
+    # 對應 verify_text_present 版本的「需要多按一次查詢按鈕」情境。
+    page = _page_with_selectable_option(["打者成績", "投手成績"])
+    page.content.side_effect = ["<html>打擊率...(舊內容)</html>", "<html>防禦率...(新內容)</html>"]
+
+    query_button = Mock()
+    query_button.count.return_value = 1
+    page.get_by_text.return_value.first = query_button
+
+    result = _select_and_verify(
+        page, url="https://example.com", option_text="投手成績",
+        verify_text_absent=None, verify_text_present="防禦率", timeout_ms=1000,
+    )
+
+    assert result == "<html>防禦率...(新內容)</html>"
+    query_button.click.assert_called_once()
+
+
+def test_select_and_verify_raises_when_expected_marker_never_appears():
+    page = _page_with_selectable_option(["打者成績", "投手成績"])
+    page.content.return_value = "<html>打擊率...(還是舊內容)</html>"
+
+    no_button = Mock()
+    no_button.count.return_value = 0
+    page.get_by_text.return_value.first = no_button
+
+    with pytest.raises(FetchError, match="防禦率"):
+        _select_and_verify(
+            page, url="https://example.com", option_text="投手成績",
+            verify_text_absent=None, verify_text_present="防禦率", timeout_ms=1000,
+        )
+
+
 def test_diagnostic_body_snippet_strips_head_boilerplate_and_keeps_body():
     # 這是修這支程式的實際原因：官網的 <head> 塞了一堆 Google Tag Manager、
     # jQuery 選單套件等追蹤碼／樣式表，光 <head> 就吃光原本 4000 字元的

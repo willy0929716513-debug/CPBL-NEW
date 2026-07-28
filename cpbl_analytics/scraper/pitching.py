@@ -7,6 +7,16 @@
 
 跟 batting.py 一樣，「排名」跟「球員」是合併儲存格（形如
 "1\\n中信兄弟\\n投手名字"），見 _split_team_and_player()。
+
+以下欄位已從實際 GitHub Actions 執行結果（2026-07-28 的診斷 HTML 輸出）
+確認真的存在、順序也是這樣：防禦率／出賽數／先發／救援／完投／完封／
+勝場／敗場／救援成功／中繼成功／打席／投球數／投球局數／被安打／
+被全壘打（表格從這裡開始被截斷，後面欄位還沒實際確認過）。
+
+其中「救援」是跟「救援成功」不同的欄位（前者可能是「後援出賽次數」，
+後者才是嚴格定義的 SV），目前沒有對應到任何內部欄位，先不處理；
+「打席」「投球數」（對戰打席數、投球數）也是目前沒有建模的欄位，
+純粹在解析時被忽略，不影響其他欄位的對應。
 """
 from __future__ import annotations
 
@@ -30,10 +40,10 @@ COLUMNS = [
     ColumnSpec(("先發", "GS"), "games_started", required=False),
     ColumnSpec(("完投", "CG"), "complete_games", required=False),
     ColumnSpec(("完封", "SHO"), "shutouts", required=False),
-    ColumnSpec(("勝投", "勝", "W"), "wins"),
-    ColumnSpec(("敗投", "敗", "L"), "losses"),
-    ColumnSpec(("救援成功", "救援", "SV"), "saves", required=False),
-    ColumnSpec(("中繼", "HLD"), "holds", required=False),
+    ColumnSpec(("勝場", "勝投", "勝", "W"), "wins"),
+    ColumnSpec(("敗場", "敗投", "敗", "L"), "losses"),
+    ColumnSpec(("救援成功", "SV"), "saves", required=False),
+    ColumnSpec(("中繼成功", "中繼", "HLD"), "holds", required=False),
     ColumnSpec(("投球局數", "局數", "IP"), "innings_pitched_raw"),
     ColumnSpec(("被安打", "安打", "H"), "hits_allowed", required=False),
     ColumnSpec(("被全壘打", "全壘打", "HR"), "home_runs_allowed", required=False),
@@ -135,11 +145,19 @@ def fetch_pitching_stats(*, html: str | None = None, year: int | None = None) ->
             url = f"{url}?year={year}"
         # 官網下拉選單裡這個選項實際顯示的文字是「投手成績」，不是單純的「投手」
         # （已從實際錯誤訊息的 call log 確認：`locator resolved to <option value="02">投手成績</option>`）。
-        # verify_text_absent="打擊率"：這是打者表才有的表頭，之前選了這個選項後
-        # 抓到的還是一模一樣的打者資料，代表光呼叫 select_option() 沒有真的觸發
-        # 這個查詢頁面重新查詢，需要再確認一次畫面是否真的換成投手資料。
+        #
+        # verify_text_present="防禦率"：投手表格第一欄表頭就是「防禦率」（ERA），
+        # 打者表格不會出現這個詞，是安全的「新畫面專屬標記」。
+        #
+        # 這裡刻意不用 verify_text_absent="打擊率"（曾經這樣寫過，是這支程式
+        # 前一版真正卡住的原因）：從實際 GitHub Actions 執行結果確認，切換到
+        # 投手成績其實一直都有成功（表頭正確變成防禦率/出賽數/先發/救援/完投/
+        # 完封/勝場/敗場/救援成功/中繼成功/打席/投球數/投球局數/被安打/
+        # 被全壘打...），但投手表格自己還有一欄「被打擊率」（對手打擊率），
+        # 字串裡剛好包含「打擊率」三個字，導致舊版「打擊率不見了才算切換
+        # 成功」的檢查永遠判定失敗，即使切換早就成功了。
         html = get_rendered_html_after_selecting(
-            url, option_text="投手成績", verify_text_absent="打擊率"
+            url, option_text="投手成績", verify_text_present="防禦率"
         )
 
     rows = parse_table(html, table_selector=TABLE_SELECTOR, columns=COLUMNS)
