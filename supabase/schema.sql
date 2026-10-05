@@ -92,26 +92,74 @@ alter table oral_sessions enable row level security;
 alter table lessons enable row level security;
 alter table podcasts enable row level security;
 
-do $$
-declare
-  t text;
-begin
-  for t in select unnest(array[
-    'materials', 'study_plan_progress', 'flashcard_sets', 'quiz_attempts',
-    'written_exams', 'oral_sessions', 'lessons', 'podcasts'
-  ])
-  loop
-    execute format(
-      'create policy "owner_select" on %I for select using (auth.uid() = user_id)', t
-    );
-    execute format(
-      'create policy "owner_insert" on %I for insert with check (auth.uid() = user_id)', t
-    );
-    execute format(
-      'create policy "owner_update" on %I for update using (auth.uid() = user_id)', t
-    );
-    execute format(
-      'create policy "owner_delete" on %I for delete using (auth.uid() = user_id)', t
-    );
-  end loop;
-end $$;
+drop policy if exists "owner_select" on materials;
+create policy "owner_select" on materials for select using (auth.uid() = user_id);
+drop policy if exists "owner_insert" on materials;
+create policy "owner_insert" on materials for insert with check (auth.uid() = user_id);
+drop policy if exists "owner_update" on materials;
+create policy "owner_update" on materials for update using (auth.uid() = user_id);
+drop policy if exists "owner_delete" on materials;
+create policy "owner_delete" on materials for delete using (auth.uid() = user_id);
+
+drop policy if exists "owner_select" on study_plan_progress;
+create policy "owner_select" on study_plan_progress for select using (auth.uid() = user_id);
+drop policy if exists "owner_insert" on study_plan_progress;
+create policy "owner_insert" on study_plan_progress for insert with check (auth.uid() = user_id);
+drop policy if exists "owner_update" on study_plan_progress;
+create policy "owner_update" on study_plan_progress for update using (auth.uid() = user_id);
+drop policy if exists "owner_delete" on study_plan_progress;
+create policy "owner_delete" on study_plan_progress for delete using (auth.uid() = user_id);
+
+drop policy if exists "owner_select" on flashcard_sets;
+create policy "owner_select" on flashcard_sets for select using (auth.uid() = user_id);
+drop policy if exists "owner_insert" on flashcard_sets;
+create policy "owner_insert" on flashcard_sets for insert with check (auth.uid() = user_id);
+drop policy if exists "owner_update" on flashcard_sets;
+create policy "owner_update" on flashcard_sets for update using (auth.uid() = user_id);
+drop policy if exists "owner_delete" on flashcard_sets;
+create policy "owner_delete" on flashcard_sets for delete using (auth.uid() = user_id);
+
+drop policy if exists "owner_select" on quiz_attempts;
+create policy "owner_select" on quiz_attempts for select using (auth.uid() = user_id);
+drop policy if exists "owner_insert" on quiz_attempts;
+create policy "owner_insert" on quiz_attempts for insert with check (auth.uid() = user_id);
+drop policy if exists "owner_update" on quiz_attempts;
+create policy "owner_update" on quiz_attempts for update using (auth.uid() = user_id);
+drop policy if exists "owner_delete" on quiz_attempts;
+create policy "owner_delete" on quiz_attempts for delete using (auth.uid() = user_id);
+
+drop policy if exists "owner_select" on written_exams;
+create policy "owner_select" on written_exams for select using (auth.uid() = user_id);
+drop policy if exists "owner_insert" on written_exams;
+create policy "owner_insert" on written_exams for insert with check (auth.uid() = user_id);
+drop policy if exists "owner_update" on written_exams;
+create policy "owner_update" on written_exams for update using (auth.uid() = user_id);
+drop policy if exists "owner_delete" on written_exams;
+create policy "owner_delete" on written_exams for delete using (auth.uid() = user_id);
+
+drop policy if exists "owner_select" on oral_sessions;
+create policy "owner_select" on oral_sessions for select using (auth.uid() = user_id);
+drop policy if exists "owner_insert" on oral_sessions;
+create policy "owner_insert" on oral_sessions for insert with check (auth.uid() = user_id);
+drop policy if exists "owner_update" on oral_sessions;
+create policy "owner_update" on oral_sessions for update using (auth.uid() = user_id);
+drop policy if exists "owner_delete" on oral_sessions;
+create policy "owner_delete" on oral_sessions for delete using (auth.uid() = user_id);
+
+drop policy if exists "owner_select" on lessons;
+create policy "owner_select" on lessons for select using (auth.uid() = user_id);
+drop policy if exists "owner_insert" on lessons;
+create policy "owner_insert" on lessons for insert with check (auth.uid() = user_id);
+drop policy if exists "owner_update" on lessons;
+create policy "owner_update" on lessons for update using (auth.uid() = user_id);
+drop policy if exists "owner_delete" on lessons;
+create policy "owner_delete" on lessons for delete using (auth.uid() = user_id);
+
+drop policy if exists "owner_select" on podcasts;
+create policy "owner_select" on podcasts for select using (auth.uid() = user_id);
+drop policy if exists "owner_insert" on podcasts;
+create policy "owner_insert" on podcasts for insert with check (auth.uid() = user_id);
+drop policy if exists "owner_update" on podcasts;
+create policy "owner_update" on podcasts for update using (auth.uid() = user_id);
+drop policy if exists "owner_delete" on podcasts;
+create policy "owner_delete" on podcasts for delete using (auth.uid() = user_id);
