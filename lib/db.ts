@@ -1,7 +1,6 @@
 "use client";
 
-import { openDB, type DBSchema, type IDBPDatabase } from "idb";
-
+import { createClient } from "./supabase/client";
 import type {
   Flashcard,
   GradedExam,
@@ -12,19 +11,25 @@ import type {
   QuizQuestion,
   WrittenExam,
 } from "./claude";
+import type { Database } from "./supabase/types";
 
 /**
- * 所有學習資料都存在瀏覽器本機的 IndexedDB，不會送到任何伺服器（除了呼叫
- * Claude API 當下那一次請求）。這個 app 目前沒有帳號系統，所以也沒有
- * 「雲端同步」這回事——換瀏覽器、換裝置、清瀏覽器資料都會讓紀錄消失，
- * 這是刻意的設計取捨（見 README），不是 bug。
+ * 所有學習資料存在 Supabase（Postgres + Row Level Security），綁定目前
+ * 登入的帳號——換瀏覽器、換裝置，登入同一個帳號就會看到同一份資料。
+ * 這裡的每個函式維持跟舊版（存在瀏覽器 IndexedDB 那版）完全相同的介面，
+ * 呼叫端（app/ 底下的頁面元件）完全不用改。
+ *
+ * user_id 欄位由資料庫自己用 `default auth.uid()` 補上（見
+ * supabase/schema.sql），這裡的 insert 都不用手動帶 user_id；Row Level
+ * Security 會確保一個使用者永遠查不到別人的資料，就算前端邏輯有 bug
+ * 也一樣擋得住。
  */
 
 export interface Material {
   id: string;
   createdAt: number;
   fileName: string;
-  context: string; // 給後續每個功能（出題、批改...）當背景知識用的純文字內容
+  context: string;
   analysis: MaterialAnalysis;
 }
 
@@ -75,196 +80,283 @@ export interface PodcastRecord {
   podcast: PodcastScript;
 }
 
-export interface StudyPlanProgress {
-  materialId: string;
-  completedSteps: number[]; // 完成的 studyPlan.day 編號
+function toEpoch(isoString: string): number {
+  return new Date(isoString).getTime();
 }
 
-interface PathlightDB extends DBSchema {
-  materials: { key: string; value: Material };
-  flashcardSets: { key: string; value: FlashcardSet; indexes: { materialId: string } };
-  quizAttempts: { key: string; value: QuizAttempt; indexes: { materialId: string } };
-  writtenExams: { key: string; value: WrittenExamAttempt; indexes: { materialId: string } };
-  oralSessions: { key: string; value: OralSession; indexes: { materialId: string } };
-  lessons: { key: string; value: LessonRecord; indexes: { materialId: string } };
-  podcasts: { key: string; value: PodcastRecord; indexes: { materialId: string } };
-  studyPlanProgress: { key: string; value: StudyPlanProgress }; // key = materialId
+function throwIfError<T>(result: { data: T | null; error: { message: string } | null }): T {
+  if (result.error) throw new Error(result.error.message);
+  if (result.data === null) throw new Error("沒有收到資料庫回應。");
+  return result.data;
 }
 
-let dbPromise: Promise<IDBPDatabase<PathlightDB>> | null = null;
+type MaterialRow = Database["public"]["Tables"]["materials"]["Row"];
 
-function getDB(): Promise<IDBPDatabase<PathlightDB>> {
-  dbPromise ??= openDB<PathlightDB>("pathlight", 1, {
-    upgrade(db) {
-      db.createObjectStore("materials", { keyPath: "id" });
-      for (const name of ["flashcardSets", "quizAttempts", "writtenExams", "oralSessions", "lessons", "podcasts"] as const) {
-        const store = db.createObjectStore(name, { keyPath: "id" });
-        store.createIndex("materialId", "materialId");
-      }
-      db.createObjectStore("studyPlanProgress", { keyPath: "materialId" });
-    },
-  });
-  return dbPromise;
-}
-
-function newId(): string {
-  return crypto.randomUUID();
+function mapMaterial(row: MaterialRow): Material {
+  return {
+    id: row.id,
+    createdAt: toEpoch(row.created_at),
+    fileName: row.file_name,
+    context: row.context,
+    analysis: row.analysis,
+  };
 }
 
 export async function saveMaterial(input: Omit<Material, "id" | "createdAt">): Promise<Material> {
-  const material: Material = { ...input, id: newId(), createdAt: Date.now() };
-  const db = await getDB();
-  await db.put("materials", material);
-  return material;
+  const supabase = createClient();
+  const result = await supabase
+    .from("materials")
+    .insert({ file_name: input.fileName, context: input.context, analysis: input.analysis })
+    .select()
+    .single();
+  return mapMaterial(throwIfError(result));
 }
 
 export async function listMaterials(): Promise<Material[]> {
-  const db = await getDB();
-  const all = await db.getAll("materials");
-  return all.sort((a, b) => b.createdAt - a.createdAt);
+  const supabase = createClient();
+  const result = await supabase.from("materials").select().order("created_at", { ascending: false });
+  return throwIfError(result).map(mapMaterial);
 }
 
 export async function getMaterial(id: string): Promise<Material | undefined> {
-  const db = await getDB();
-  return db.get("materials", id);
-}
-
-// idb 的 TypeScript 型別定義裡，index.iterate() 的 key 型別是從 storeName
-// 這個泛型參數條件推導出來的——在泛型函式「本體內」（storeName 還沒被換成
-// 具體字面值型別的階段），TypeScript 沒辦法把這種條件型別化簡回 string，
-// 這是 TS 已知的限制，不是我們邏輯寫錯。這裡用一個窄範圍的型別斷言繞過去
-// （materialId 本來就保證是 string，執行時期行為完全正確）。
-async function deleteFromStore<Name extends "flashcardSets" | "quizAttempts" | "writtenExams" | "oralSessions" | "lessons" | "podcasts">(
-  db: IDBPDatabase<PathlightDB>,
-  storeName: Name,
-  materialId: string,
-): Promise<void> {
-  const tx = db.transaction(storeName, "readwrite");
-  const index = tx.store.index("materialId");
-  for await (const cursor of index.iterate(materialId as never)) {
-    await cursor.delete();
-  }
-  await tx.done;
+  const supabase = createClient();
+  const { data, error } = await supabase.from("materials").select().eq("id", id).maybeSingle();
+  if (error) throw new Error(error.message);
+  return data ? mapMaterial(data) : undefined;
 }
 
 export async function deleteMaterial(id: string): Promise<void> {
-  const db = await getDB();
-  await db.delete("materials", id);
-  await db.delete("studyPlanProgress", id);
-  await deleteFromStore(db, "flashcardSets", id);
-  await deleteFromStore(db, "quizAttempts", id);
-  await deleteFromStore(db, "writtenExams", id);
-  await deleteFromStore(db, "oralSessions", id);
-  await deleteFromStore(db, "lessons", id);
-  await deleteFromStore(db, "podcasts", id);
+  const supabase = createClient();
+  // 其他表都用 material_id 設了 `on delete cascade`（見 schema.sql），
+  // 刪掉這一筆 materials，相關的 flashcard_sets／quiz_attempts／...
+  // 全部會被資料庫自動清掉，不用在這裡一個一個表手動刪。
+  const { error } = await supabase.from("materials").delete().eq("id", id);
+  if (error) throw new Error(error.message);
 }
 
-async function saveRecord<Name extends "flashcardSets" | "quizAttempts" | "writtenExams" | "oralSessions" | "lessons" | "podcasts">(
-  storeName: Name,
-  record: PathlightDB[Name]["value"],
-): Promise<void> {
-  const db = await getDB();
-  await db.put(storeName, record);
-}
+type FlashcardSetRow = Database["public"]["Tables"]["flashcard_sets"]["Row"];
 
-async function listRecords<Name extends "flashcardSets" | "quizAttempts" | "writtenExams" | "oralSessions" | "lessons" | "podcasts">(
-  storeName: Name,
-  materialId: string,
-): Promise<PathlightDB[Name]["value"][]> {
-  const db = await getDB();
-  const all = await db.getAllFromIndex(storeName, "materialId", materialId as never);
-  return all.sort((a, b) => b.createdAt - a.createdAt);
+function mapFlashcardSet(row: FlashcardSetRow): FlashcardSet {
+  return { id: row.id, materialId: row.material_id, createdAt: toEpoch(row.created_at), cards: row.cards };
 }
 
 export const flashcardsRepo = {
-  create: (materialId: string, cards: Flashcard[]): Promise<FlashcardSet> => {
-    const record: FlashcardSet = { id: newId(), materialId, createdAt: Date.now(), cards };
-    return saveRecord("flashcardSets", record).then(() => record);
+  create: async (materialId: string, cards: Flashcard[]): Promise<FlashcardSet> => {
+    const supabase = createClient();
+    const result = await supabase
+      .from("flashcard_sets")
+      .insert({ material_id: materialId, cards })
+      .select()
+      .single();
+    return mapFlashcardSet(throwIfError(result));
   },
-  listByMaterial: (materialId: string) => listRecords("flashcardSets", materialId),
+  listByMaterial: async (materialId: string): Promise<FlashcardSet[]> => {
+    const supabase = createClient();
+    const result = await supabase
+      .from("flashcard_sets")
+      .select()
+      .eq("material_id", materialId)
+      .order("created_at", { ascending: false });
+    return throwIfError(result).map(mapFlashcardSet);
+  },
 };
 
+type QuizAttemptRow = Database["public"]["Tables"]["quiz_attempts"]["Row"];
+
+function mapQuizAttempt(row: QuizAttemptRow): QuizAttempt {
+  return {
+    id: row.id,
+    materialId: row.material_id,
+    createdAt: toEpoch(row.created_at),
+    questions: row.questions,
+    answers: row.answers,
+    completedAt: row.completed_at ? toEpoch(row.completed_at) : null,
+  };
+}
+
 export const quizRepo = {
-  create: (materialId: string, questions: QuizQuestion[]): Promise<QuizAttempt> => {
-    const record: QuizAttempt = {
-      id: newId(),
-      materialId,
-      createdAt: Date.now(),
-      questions,
-      answers: questions.map(() => null),
-      completedAt: null,
-    };
-    return saveRecord("quizAttempts", record).then(() => record);
+  create: async (materialId: string, questions: QuizQuestion[]): Promise<QuizAttempt> => {
+    const supabase = createClient();
+    const result = await supabase
+      .from("quiz_attempts")
+      .insert({ material_id: materialId, questions, answers: questions.map(() => null) })
+      .select()
+      .single();
+    return mapQuizAttempt(throwIfError(result));
   },
-  update: (record: QuizAttempt) => saveRecord("quizAttempts", record),
-  // 把「答案已經作答過就不能改」+「算有沒有全部答完」+「蓋上完成時間戳記」
-  // 這幾件跟時間／資料正確性有關的邏輯放在這裡，而不是放在畫面元件裡
-  // 呼叫 Date.now()——React 19 的 eslint-plugin-react-hooks 新增的
-  // purity 規則會擋下任何在元件檔案裡呼叫的非純函式（即使是在事件處理
-  // 函式裡），資料層本來就不受這條規則限制，邏輯放這裡也更合理。
+  update: async (record: QuizAttempt): Promise<void> => {
+    const supabase = createClient();
+    const { error } = await supabase
+      .from("quiz_attempts")
+      .update({ answers: record.answers, completed_at: record.completedAt ? new Date(record.completedAt).toISOString() : null })
+      .eq("id", record.id);
+    if (error) throw new Error(error.message);
+  },
   answerQuestion: async (attempt: QuizAttempt, questionIndex: number, choiceIndex: number): Promise<QuizAttempt> => {
     if (attempt.answers[questionIndex] !== null) return attempt;
     const answers = [...attempt.answers];
     answers[questionIndex] = choiceIndex;
     const allAnswered = answers.every((a) => a !== null);
     const updated: QuizAttempt = { ...attempt, answers, completedAt: allAnswered ? Date.now() : null };
-    await saveRecord("quizAttempts", updated);
+    await quizRepo.update(updated);
     return updated;
   },
-  listByMaterial: (materialId: string) => listRecords("quizAttempts", materialId),
+  listByMaterial: async (materialId: string): Promise<QuizAttempt[]> => {
+    const supabase = createClient();
+    const result = await supabase
+      .from("quiz_attempts")
+      .select()
+      .eq("material_id", materialId)
+      .order("created_at", { ascending: false });
+    return throwIfError(result).map(mapQuizAttempt);
+  },
 };
+
+type WrittenExamRow = Database["public"]["Tables"]["written_exams"]["Row"];
+
+function mapWrittenExam(row: WrittenExamRow): WrittenExamAttempt {
+  return {
+    id: row.id,
+    materialId: row.material_id,
+    createdAt: toEpoch(row.created_at),
+    exam: row.exam,
+    answers: row.answers,
+    graded: row.graded,
+  };
+}
 
 export const writtenExamRepo = {
-  create: (materialId: string, exam: WrittenExam): Promise<WrittenExamAttempt> => {
-    const record: WrittenExamAttempt = {
-      id: newId(),
-      materialId,
-      createdAt: Date.now(),
-      exam,
-      answers: exam.questions.map(() => ""),
-      graded: null,
-    };
-    return saveRecord("writtenExams", record).then(() => record);
+  create: async (materialId: string, exam: WrittenExam): Promise<WrittenExamAttempt> => {
+    const supabase = createClient();
+    const result = await supabase
+      .from("written_exams")
+      .insert({ material_id: materialId, exam, answers: exam.questions.map(() => "") })
+      .select()
+      .single();
+    return mapWrittenExam(throwIfError(result));
   },
-  update: (record: WrittenExamAttempt) => saveRecord("writtenExams", record),
-  listByMaterial: (materialId: string) => listRecords("writtenExams", materialId),
+  update: async (record: WrittenExamAttempt): Promise<void> => {
+    const supabase = createClient();
+    const { error } = await supabase
+      .from("written_exams")
+      .update({ answers: record.answers, graded: record.graded })
+      .eq("id", record.id);
+    if (error) throw new Error(error.message);
+  },
+  listByMaterial: async (materialId: string): Promise<WrittenExamAttempt[]> => {
+    const supabase = createClient();
+    const result = await supabase
+      .from("written_exams")
+      .select()
+      .eq("material_id", materialId)
+      .order("created_at", { ascending: false });
+    return throwIfError(result).map(mapWrittenExam);
+  },
 };
+
+type OralSessionRow = Database["public"]["Tables"]["oral_sessions"]["Row"];
+
+function mapOralSession(row: OralSessionRow): OralSession {
+  return {
+    id: row.id,
+    materialId: row.material_id,
+    createdAt: toEpoch(row.created_at),
+    questions: row.questions,
+    results: row.results,
+  };
+}
 
 export const oralSessionRepo = {
-  create: (materialId: string, questions: string[]): Promise<OralSession> => {
-    const record: OralSession = { id: newId(), materialId, createdAt: Date.now(), questions, results: [] };
-    return saveRecord("oralSessions", record).then(() => record);
+  create: async (materialId: string, questions: string[]): Promise<OralSession> => {
+    const supabase = createClient();
+    const result = await supabase
+      .from("oral_sessions")
+      .insert({ material_id: materialId, questions, results: [] })
+      .select()
+      .single();
+    return mapOralSession(throwIfError(result));
   },
-  update: (record: OralSession) => saveRecord("oralSessions", record),
-  listByMaterial: (materialId: string) => listRecords("oralSessions", materialId),
+  update: async (record: OralSession): Promise<void> => {
+    const supabase = createClient();
+    const { error } = await supabase.from("oral_sessions").update({ results: record.results }).eq("id", record.id);
+    if (error) throw new Error(error.message);
+  },
+  listByMaterial: async (materialId: string): Promise<OralSession[]> => {
+    const supabase = createClient();
+    const result = await supabase
+      .from("oral_sessions")
+      .select()
+      .eq("material_id", materialId)
+      .order("created_at", { ascending: false });
+    return throwIfError(result).map(mapOralSession);
+  },
 };
+
+type LessonRow = Database["public"]["Tables"]["lessons"]["Row"];
+
+function mapLesson(row: LessonRow): LessonRecord {
+  return { id: row.id, materialId: row.material_id, createdAt: toEpoch(row.created_at), lesson: row.lesson };
+}
 
 export const lessonRepo = {
-  create: (materialId: string, lesson: Lesson): Promise<LessonRecord> => {
-    const record: LessonRecord = { id: newId(), materialId, createdAt: Date.now(), lesson };
-    return saveRecord("lessons", record).then(() => record);
+  create: async (materialId: string, lesson: Lesson): Promise<LessonRecord> => {
+    const supabase = createClient();
+    const result = await supabase.from("lessons").insert({ material_id: materialId, lesson }).select().single();
+    return mapLesson(throwIfError(result));
   },
-  listByMaterial: (materialId: string) => listRecords("lessons", materialId),
+  listByMaterial: async (materialId: string): Promise<LessonRecord[]> => {
+    const supabase = createClient();
+    const result = await supabase
+      .from("lessons")
+      .select()
+      .eq("material_id", materialId)
+      .order("created_at", { ascending: false });
+    return throwIfError(result).map(mapLesson);
+  },
 };
 
+type PodcastRow = Database["public"]["Tables"]["podcasts"]["Row"];
+
+function mapPodcast(row: PodcastRow): PodcastRecord {
+  return { id: row.id, materialId: row.material_id, createdAt: toEpoch(row.created_at), podcast: row.podcast };
+}
+
 export const podcastRepo = {
-  create: (materialId: string, podcast: PodcastScript): Promise<PodcastRecord> => {
-    const record: PodcastRecord = { id: newId(), materialId, createdAt: Date.now(), podcast };
-    return saveRecord("podcasts", record).then(() => record);
+  create: async (materialId: string, podcast: PodcastScript): Promise<PodcastRecord> => {
+    const supabase = createClient();
+    const result = await supabase.from("podcasts").insert({ material_id: materialId, podcast }).select().single();
+    return mapPodcast(throwIfError(result));
   },
-  listByMaterial: (materialId: string) => listRecords("podcasts", materialId),
+  listByMaterial: async (materialId: string): Promise<PodcastRecord[]> => {
+    const supabase = createClient();
+    const result = await supabase
+      .from("podcasts")
+      .select()
+      .eq("material_id", materialId)
+      .order("created_at", { ascending: false });
+    return throwIfError(result).map(mapPodcast);
+  },
 };
 
 export async function getProgress(materialId: string): Promise<number[]> {
-  const db = await getDB();
-  const record = await db.get("studyPlanProgress", materialId);
-  return record?.completedSteps ?? [];
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("study_plan_progress")
+    .select("completed_steps")
+    .eq("material_id", materialId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data?.completed_steps ?? [];
 }
 
 export async function toggleStepComplete(materialId: string, day: number): Promise<number[]> {
-  const db = await getDB();
-  const existing = (await db.get("studyPlanProgress", materialId))?.completedSteps ?? [];
+  const existing = await getProgress(materialId);
   const completedSteps = existing.includes(day) ? existing.filter((d) => d !== day) : [...existing, day];
-  await db.put("studyPlanProgress", { materialId, completedSteps });
+
+  const supabase = createClient();
+  const { error } = await supabase
+    .from("study_plan_progress")
+    .upsert({ material_id: materialId, completed_steps: completedSteps });
+  if (error) throw new Error(error.message);
   return completedSteps;
 }
